@@ -225,3 +225,17 @@ pub struct RateFormulaConfigEvent {
     pub enabled: bool,
 }
 
+<<<<<<< HEAD
+=======
+/// Global protocol configuration.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolConfig {
+    /// Configured liquidity token.
+    pub liquidity_token: Option<Address>,
+    /// Configured liquidity source.
+    pub liquidity_source: Option<Address>,
+    /// Configured rate change limits.
+    pub rate_change_config: Option<RateChangeConfig>,
+}
+>>>>>>> upstream/main

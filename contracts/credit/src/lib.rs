@@ -12,9 +12,38 @@ mod amount_validation_tests;
 mod auth;
 mod borrow;
 mod config;
-mod events;
+pub mod events;
 mod freeze;
 mod lifecycle;
+mod query;
+mod accrual;
+mod math_utils;
+mod risk;
+mod storage;
+pub mod types;
+use crate::storage::{DataKey, rate_cfg_key};
+use crate::auth::require_admin_auth;
+use crate::storage::{clear_reentrancy_guard, set_reentrancy_guard};
+mod risk;
+mod storage;
+pub mod types;
+
+#[cfg(test)]
+mod boundary_tests;
+#[cfg(test)]
+mod accrual;
+#[cfg(test)]
+mod accrual_tests;
+#[cfg(test)]
+mod amount_validation_tests;
+mod auth;
+mod borrow;
+mod config;
+pub mod events;
+mod freeze;
+mod lifecycle;
+mod query;
+mod math_utils;
 mod risk;
 mod storage;
 pub mod types;
@@ -26,30 +55,58 @@ mod risk_formula_tests;
 
 use crate::auth::require_admin_auth;
 use crate::events::{
-    publish_admin_rotation_accepted, publish_admin_rotation_proposed,
-    publish_credit_line_event, publish_draw_reversed_event, publish_drawn_event,
-    publish_interest_accrued_event, publish_paused_event, publish_rate_formula_config_event,
-    publish_repayment_event, AdminRotationAcceptedEvent, AdminRotationProposedEvent,
-    CreditLineEvent, DrawReversedEvent, DrawnEvent, InterestAccruedEvent, RepaymentEvent,
+    publish_admin_rotation_accepted,
+    publish_admin_rotation_proposed,
+    publish_credit_line_event,
+    publish_draw_reversed_event,
+    publish_drawn_event,
+    publish_interest_accrued_event,
+    publish_paused_event,
+    publish_rate_formula_config_event,
+    publish_repayment_event,
+    publish_borrower_blocked_event,
+    AdminRotationAcceptedEvent,
+    AdminRotationProposedEvent,
+    CreditLineEvent,
+    DrawReversedEvent,
+    DrawnEvent,
+    InterestAccruedEvent,
+    RepaymentEvent,
 };
+use crate::math_utils::{mul_div, Rounding};
 use crate::storage::{
-    admin_key, assert_not_paused, clear_reentrancy_guard, proposed_admin_key, proposed_at_key,
-    rate_cfg_key, rate_formula_key, set_paused, set_reentrancy_guard, DataKey,
+    admin_key,
+    assert_not_paused,
+    clear_reentrancy_guard,
+    proposed_admin_key,
+    proposed_at_key,
+    rate_cfg_key,
+    rate_formula_key,
+    set_paused,
+    set_reentrancy_guard,
+    DataKey,
+    set_borrower_blocked as storage_set_borrower_blocked,
+    set_borrower_unblocked,
+    is_borrower_blocked as storage_is_borrower_blocked,
 };
 use crate::types::{
-    ContractError, CreditLineData, CreditStatus, GracePeriodConfig, GraceWaiverMode,
-    RateChangeConfig, RateFormulaConfig,
+    ContractError,
+    CreditLineData,
+    CreditStatus,
+    GracePeriodConfig,
+    GraceWaiverMode,
+    ProtocolConfig,
+    RateChangeConfig,
+    RateFormulaConfig,
 };
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, Symbol};
-
-pub const CONTRACT_API_VERSION: (u32, u32, u32) = (1, 0, 0);
-pub const DRAW_REVERSAL_WINDOW_SECS: u64 = 3_600;
-
-#[allow(dead_code)]
-const SECONDS_PER_YEAR: u64 = 31_536_000;
+use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, Symbol, Vec};
 
 #[allow(dead_code)]
 const SCHEMA_VERSION: u32 = 1;
+
+/// Maximum borrowers that can be blocked in a single `bulk_block_borrowers` call.
+/// Prevents unbounded gas consumption. Adjust after gas profiling.
+const BULK_BLOCK_MAX: u32 = 50;
 
 #[contract]
 pub struct Credit;
@@ -159,7 +216,7 @@ impl Credit {
             env.panic_with_error(ContractError::ScoreTooHigh);
         }
 
-        if let Some(existing) = env
+        let previous_utilized = if let Some(existing) = env
             .storage()
             .persistent()
             .get::<Address, CreditLineData>(&borrower)
@@ -168,7 +225,10 @@ impl Credit {
                 existing.status != CreditStatus::Active,
                 "borrower already has an active credit line"
             );
-        }
+            existing.utilized_amount
+        } else {
+            0
+        };
 
         let credit_line = CreditLineData {
             borrower: borrower.clone(),
@@ -183,7 +243,7 @@ impl Credit {
             suspension_ts: 0,
         };
 
-        env.storage().persistent().set(&borrower, &credit_line);
+        persist_credit_line(&env, &borrower, &credit_line, previous_utilized);
 
         publish_credit_line_event(
             &env,
@@ -244,16 +304,17 @@ impl Credit {
             }
         }
 
-        let mut credit_line: CreditLineData = env
-            .storage()
-            .persistent()
-            .get(&borrower)
-            .unwrap_or_else(|| {
-                clear_reentrancy_guard(&env);
-                env.panic_with_error(ContractError::CreditLineNotFound)
-            });
+        let stored_line: CreditLineData =
+            env.storage()
+                .persistent()
+                .get(&borrower)
+                .unwrap_or_else(|| {
+                    clear_reentrancy_guard(&env);
+                    env.panic_with_error(ContractError::CreditLineNotFound)
+                });
+        let previous_utilized = stored_line.utilized_amount;
 
-        credit_line = accrual::apply_accrual(&env, credit_line);
+        let mut credit_line = accrual::apply_accrual(&env, stored_line);
 
         if let Some(error) = borrow::draw_status_error(credit_line.status) {
             clear_reentrancy_guard(&env);
@@ -301,14 +362,20 @@ impl Credit {
             .instance()
             .get::<_, u32>(&DataKey::UtilizationCapBps(borrower.clone()))
         {
-            let cap_amount = credit_line
-                .credit_limit
-                .checked_mul(cap_bps as i128)
-                .and_then(|v| v.checked_div(10_000))
-                .unwrap_or_else(|| {
-                    clear_reentrancy_guard(&env);
-                    env.panic_with_error(ContractError::Overflow)
-                });
+            let credit_limit_u128 = u128::try_from(credit_line.credit_limit).unwrap_or_else(|_| {
+                clear_reentrancy_guard(&env);
+                env.panic_with_error(ContractError::Overflow)
+            });
+            let cap_amount = i128::try_from(mul_div(
+                credit_limit_u128,
+                cap_bps as u128,
+                10_000,
+                Rounding::Floor,
+            ))
+            .unwrap_or_else(|_| {
+                clear_reentrancy_guard(&env);
+                env.panic_with_error(ContractError::Overflow)
+            });
             if updated_utilized > cap_amount {
                 clear_reentrancy_guard(&env);
                 panic!("exceeds utilization cap");
@@ -341,7 +408,7 @@ impl Credit {
         token_client.transfer(&reserve_address, &borrower, &amount);
 
         credit_line.utilized_amount = updated_utilized;
-        env.storage().persistent().set(&borrower, &credit_line);
+        persist_credit_line(&env, &borrower, &credit_line, previous_utilized);
 
         let timestamp = env.ledger().timestamp();
         env.storage()
@@ -393,16 +460,17 @@ impl Credit {
             }
         }
 
-        let mut credit_line: CreditLineData = env
-            .storage()
-            .persistent()
-            .get(&borrower)
-            .unwrap_or_else(|| {
-                clear_reentrancy_guard(&env);
-                env.panic_with_error(ContractError::CreditLineNotFound)
-            });
+        let stored_line: CreditLineData =
+            env.storage()
+                .persistent()
+                .get(&borrower)
+                .unwrap_or_else(|| {
+                    clear_reentrancy_guard(&env);
+                    env.panic_with_error(ContractError::CreditLineNotFound)
+                });
+        let previous_utilized = stored_line.utilized_amount;
 
-        credit_line = accrual::apply_accrual(&env, credit_line);
+        let mut credit_line = accrual::apply_accrual(&env, stored_line);
 
         if credit_line.status == CreditStatus::Closed {
             clear_reentrancy_guard(&env);
@@ -450,7 +518,7 @@ impl Credit {
             .max(0);
         credit_line.utilized_amount = new_utilized;
 
-        env.storage().persistent().set(&borrower, &credit_line);
+        persist_credit_line(&env, &borrower, &credit_line, previous_utilized);
 
         let _timestamp = env.ledger().timestamp();
         publish_interest_accrued_event(
@@ -617,6 +685,59 @@ impl Credit {
         crate::storage::get_draw_min_interval(&env)
     }
 
+    
+    /// Get the current storage schema version.
+    pub fn get_schema_version(env: Env) -> Option<u32> {
+        crate::storage::get_schema_version(&env)
+    }
+
+    /// Get the global total utilized accumulator.
+    pub fn get_total_utilized(env: Env) -> i128 {
+        crate::storage::get_total_utilized(&env)
+    }
+
+    /// Get the number of indexed credit lines.
+    pub fn get_credit_line_count(env: Env) -> u32 {
+        crate::storage::get_credit_line_count(&env)
+    }
+
+    /// Enumerate credit lines in stable insertion order.
+    ///
+    /// `start_after` is an exclusive cursor over the stable numeric id.
+    /// Results are capped by `MAX_ENUMERATION_LIMIT` for predictable cost.
+    pub fn enumerate_credit_lines(
+        env: Env,
+        start_after: Option<u32>,
+        limit: u32,
+    ) -> Vec<(u32, CreditLineData)> {
+        let count = crate::storage::get_credit_line_count(&env);
+        let capped_limit = limit.min(MAX_ENUMERATION_LIMIT);
+        let mut out = Vec::new(&env);
+
+        if capped_limit == 0 || count == 0 {
+            return out;
+        }
+
+        let mut next_id = start_after.map(|id| id.saturating_add(1)).unwrap_or(0);
+        let mut returned = 0_u32;
+        while next_id < count && returned < capped_limit {
+            if let Some(borrower) = get_borrower_by_credit_line_id(&env, next_id) {
+                if let Some(line) = env
+                    .storage()
+                    .persistent()
+                    .get::<Address, CreditLineData>(&borrower)
+                {
+                    out.push_back((next_id, line));
+                    returned = returned.saturating_add(1);
+                }
+            }
+            next_id = next_id.saturating_add(1);
+        }
+
+        out
+    }
+
+    
     pub fn suspend_credit_line(env: Env, borrower: Address) {
         lifecycle::suspend_credit_line(env, borrower)
     }
@@ -633,6 +754,11 @@ impl Credit {
         lifecycle::default_credit_line(env, borrower)
     }
 
+    /// Forgive outstanding debt without moving tokens (admin only).
+    pub fn forgive_debt(env: Env, borrower: Address, amount: i128) {
+        lifecycle::forgive_debt(env, borrower, amount)
+    }
+
     pub fn reinstate_credit_line(env: Env, borrower: Address, target_status: CreditStatus) {
         lifecycle::reinstate_credit_line(env, borrower, target_status)
     }
@@ -644,6 +770,55 @@ impl Credit {
         settlement_id: Symbol,
     ) {
         lifecycle::settle_default_liquidation(env, borrower, recovered_amount, settlement_id)
+    }
+
+    // ── Borrower blocklist ────────────────────────────────────────────────────
+
+    /// Block a single borrower. Admin only. Idempotent.
+    ///
+    /// # Events
+    /// Emits `BorrowerBlockedEvent { blocked: true }`.
+    pub fn block_borrower(env: Env, admin: Address, borrower: Address) {
+        admin.require_auth();
+        require_admin_auth(&env);
+        storage_set_borrower_blocked(&env, &borrower);
+        publish_borrower_blocked_event(&env, &borrower, true);
+    }
+
+    /// Unblock a single borrower. Admin only. Idempotent.
+    ///
+    /// # Events
+    /// Emits `BorrowerBlockedEvent { blocked: false }`.
+    pub fn unblock_borrower(env: Env, admin: Address, borrower: Address) {
+        admin.require_auth();
+        require_admin_auth(&env);
+        set_borrower_unblocked(&env, &borrower);
+        publish_borrower_blocked_event(&env, &borrower, false);
+    }
+
+    /// Return true if `borrower` is currently on the blocklist.
+    /// Read-only; no auth required; no event emitted.
+    pub fn is_borrower_blocked(env: Env, borrower: Address) -> bool {
+        storage_is_borrower_blocked(&env, &borrower)
+    }
+
+    /// Block up to `BULK_BLOCK_MAX` borrowers in a single call. Admin only.
+    ///
+    /// # Panics
+    /// If `borrowers.len() > BULK_BLOCK_MAX`.
+    ///
+    /// # Events
+    /// Emits one `BorrowerBlockedEvent { blocked: true }` per borrower.
+    pub fn bulk_block_borrowers(env: Env, admin: Address, borrowers: soroban_sdk::Vec<Address>) {
+        admin.require_auth();
+        require_admin_auth(&env);
+        if borrowers.len() as u32 > BULK_BLOCK_MAX {
+            panic!("bulk_block_borrowers: exceeds max batch size of {}", BULK_BLOCK_MAX);
+        }
+        for borrower in borrowers.iter() {
+            storage_set_borrower_blocked(&env, &borrower);
+            publish_borrower_blocked_event(&env, &borrower, true);
+        }
     }
 
     /// Return the credit line for `borrower`, or `None` if no line exists.
@@ -1153,13 +1328,12 @@ pub mod test_coverage {
         client.set_liquidity_token(&token_b);
 
         // The stored value must reflect the latest address.
-        let stored: Address = env
-            .as_contract(&contract_id, || {
-                env.storage()
-                    .instance()
-                    .get(&DataKey::LiquidityToken)
-                    .expect("LiquidityToken must be set")
-            });
+        let stored: Address = env.as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .get(&DataKey::LiquidityToken)
+                .expect("LiquidityToken must be set")
+        });
         assert_eq!(stored, token_b, "overwrite should replace the stored token");
     }
 
@@ -1468,6 +1642,12 @@ pub mod test_coverage {
         let (client, _admin, borrower) = base(&env);
         client.open_credit_line(&borrower, &500_i128, &300_u32, &70_u32);
     }
+
+#[cfg(test)]
+mod test_smoke_coverage {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
 
     #[test]
     fn lifecycle_suspend_and_reinstate() {
@@ -1872,13 +2052,21 @@ pub mod test_helpers {
     #[contractimpl]
     impl FailingTokenContract {
         pub fn init(env: Env, fail_transfer: bool, fail_transfer_from: bool) {
-            env.storage().instance().set(&symbol_short!("fail_transfer"), &fail_transfer);
-            env.storage().instance().set(&symbol_short!("fail_transfer_from"), &fail_transfer_from);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("fail_transfer"), &fail_transfer);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("fail_transfer_from"), &fail_transfer_from);
         }
 
         pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
             from.require_auth();
-            let fail: bool = env.storage().instance().get(&symbol_short!("fail_transfer")).unwrap_or(false);
+            let fail: bool = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("fail_transfer"))
+                .unwrap_or(false);
             if fail {
                 env.panic_with_error(ContractError::InvalidAmount); // arbitrary error
             }
@@ -1887,7 +2075,11 @@ pub mod test_helpers {
 
         pub fn transfer_from(env: Env, spender: Address, from: Address, to: Address, amount: i128) {
             spender.require_auth();
-            let fail: bool = env.storage().instance().get(&symbol_short!("fail_transfer_from")).unwrap_or(false);
+            let fail: bool = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("fail_transfer_from"))
+                .unwrap_or(false);
             if fail {
                 env.panic_with_error(ContractError::InvalidAmount);
             }
@@ -4105,10 +4297,10 @@ mod test_utilization_cap {
 #[cfg(test)]
 mod test_max_repay_amount {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::Env;
     use crate::types::ContractError;
+    use soroban_sdk::testutils::Address as _;
     use soroban_sdk::token::StellarAssetClient;
+    use soroban_sdk::Env;
 
     fn setup_with_token(env: &Env) -> (CreditClient, Address, Address, Address) {
         env.mock_all_auths();
@@ -4117,22 +4309,22 @@ mod test_max_repay_amount {
         let contract_id = env.register(Credit, ());
         let client = CreditClient::new(env, &contract_id);
         client.init(&admin);
-        
+
         let token_id = env.register_stellar_asset_contract_v2(Address::generate(env));
         let token = token_id.address();
         client.set_liquidity_token(&token);
-        
+
         // Mint to contract to allow draw
         StellarAssetClient::new(env, &token).mint(&contract_id, &5_000_i128);
-        
+
         client.open_credit_line(&borrower, &1_000_i128, &300_u32, &70_u32);
-        
+
         // Draw some credit to repay later
         client.draw_credit(&borrower, &500_i128);
-        
+
         // Mint to borrower so they have funds to repay
         StellarAssetClient::new(env, &token).mint(&borrower, &5_000_i128);
-        
+
         (client, admin, borrower, token)
     }
 
@@ -4140,9 +4332,9 @@ mod test_max_repay_amount {
     fn test_unset_max_repay_amount_allows_any() {
         let env = Env::default();
         let (client, _admin, borrower, _token) = setup_with_token(&env);
-        
+
         assert_eq!(client.get_max_repay_amount(), None);
-        
+
         client.repay_credit(&borrower, &400_i128);
         let line = client.get_credit_line(&borrower).unwrap();
         assert_eq!(line.utilized_amount, 100);
@@ -4152,7 +4344,7 @@ mod test_max_repay_amount {
     fn test_set_and_get_max_repay_amount() {
         let env = Env::default();
         let (client, _admin, _borrower, _token) = setup_with_token(&env);
-        
+
         client.set_max_repay_amount(&300_i128);
         assert_eq!(client.get_max_repay_amount(), Some(300_i128));
     }
@@ -4162,7 +4354,7 @@ mod test_max_repay_amount {
     fn test_repay_exceeds_max_cap_reverts() {
         let env = Env::default();
         let (client, _admin, borrower, _token) = setup_with_token(&env);
-        
+
         client.set_max_repay_amount(&300_i128);
         client.repay_credit(&borrower, &400_i128);
     }
@@ -4171,7 +4363,7 @@ mod test_max_repay_amount {
     fn test_repay_within_max_cap_succeeds() {
         let env = Env::default();
         let (client, _admin, borrower, _token) = setup_with_token(&env);
-        
+
         client.set_max_repay_amount(&300_i128);
         client.repay_credit(&borrower, &300_i128);
         let line = client.get_credit_line(&borrower).unwrap();
@@ -4183,7 +4375,7 @@ mod test_max_repay_amount {
     fn test_set_max_repay_amount_zero_or_negative() {
         let env = Env::default();
         let (client, _admin, _borrower, _token) = setup_with_token(&env);
-        
+
         client.set_max_repay_amount(&0_i128);
     }
 }

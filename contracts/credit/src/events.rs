@@ -97,7 +97,10 @@ pub struct DrawsFrozenEvent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BorrowerBlockedEvent {
     pub borrower: Address,
+    /// true = borrower was blocked; false = borrower was unblocked
     pub blocked: bool,
+    /// Ledger sequence at time of change (for off-chain indexers)
+    pub ledger: u32,
 }
 
 #[contracttype]
@@ -225,10 +228,15 @@ pub fn publish_paused_event(env: &Env, paused: bool) {
 }
 
 /// Publish a borrower blocked/unblocked event.
-#[allow(dead_code)]
-pub fn publish_borrower_blocked_event(env: &Env, event: BorrowerBlockedEvent) {
-    env.events()
-        .publish((symbol_short!("credit"), symbol_short!("blk_chg")), event);
+pub fn publish_borrower_blocked_event(env: &Env, borrower: &Address, blocked: bool) {
+    env.events().publish(
+        (Symbol::new(env, "blk_chg"),),
+        BorrowerBlockedEvent {
+            borrower: borrower.clone(),
+            blocked,
+            ledger: env.ledger().sequence(),
+        },
+    );
 }
 
 

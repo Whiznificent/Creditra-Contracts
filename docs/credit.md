@@ -498,6 +498,8 @@ Set the per-borrower draw cooldown interval in seconds (admin only).
 ### `is_draws_frozen(env) -> bool`
 Returns `true` when draws are globally frozen. Defaults to `false` when the key has never been set. No auth required.
 
+**Note for contributors**: On a freshly initialized contract (before any `freeze_draws` call), `is_draws_frozen` returns `false` by default. This is a safe default that allows draws immediately after deployment. Importantly, the freeze flag only affects `draw_credit` calls — `repay_credit` is never blocked by this flag, ensuring borrowers can always repay their debt even during emergency liquidity operations.
+
 ---
 
 ## Overflow Policy
