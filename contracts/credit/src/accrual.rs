@@ -1,19 +1,30 @@
 // SPDX-License-Identifier: MIT
 
 use crate::events::{publish_interest_accrued_event, InterestAccruedEvent};
-use crate::types::CreditLineData;
-use soroban_sdk::{Address, Env};
+use crate::types::{ContractError, CreditLineData, CreditStatus, GracePeriodConfig, GraceWaiverMode};
+use soroban_sdk::Env;
 
 pub(crate) const SECONDS_PER_YEAR: u64 = 31_536_000;
 
-fn compute_interest(utilized: i128, rate_bps: i128, seconds: i128) -> i128 {
+/// Compute simple interest: `utilized * rate_bps * seconds / (10_000 * SECONDS_PER_YEAR)`.
+///
+/// # Overflow behavior — **revert with `ContractError::Overflow`**
+/// All intermediate multiplications use `checked_mul`. If any step would exceed
+/// `i128::MAX` the function returns `Err(ContractError::Overflow)` so the caller
+/// can propagate it via `env.panic_with_error`. No silent wrapping or saturation
+/// occurs; the contract reverts deterministically.
+fn compute_interest(
+    utilized: i128,
+    rate_bps: i128,
+    seconds: i128,
+) -> Result<i128, ContractError> {
     let denominator: i128 = 10_000 * (SECONDS_PER_YEAR as i128);
     let intermediate = utilized
         .checked_mul(rate_bps)
         .and_then(|v| v.checked_mul(seconds));
     match intermediate {
-        Some(val) => val / denominator,
-        None => panic!("interest calculation overflow"),
+        Some(val) => Ok(val / denominator),
+        None => Err(ContractError::Overflow),
     }
 }
 
@@ -31,6 +42,14 @@ fn compute_interest(utilized: i128, rate_bps: i128, seconds: i128) -> i128 {
 ///   the full rate.
 /// - If no policy is configured, or the line is not Suspended, normal accrual
 ///   applies unchanged.
+///
+/// # Overflow behavior — **revert with `ContractError::Overflow`**
+/// Every arithmetic step that could overflow uses checked arithmetic. If any
+/// intermediate multiplication in `compute_interest` overflows `i128`, or if
+/// adding the newly accrued amount to `utilized_amount` / `accrued_interest`
+/// would overflow, the function reverts deterministically via
+/// `env.panic_with_error(ContractError::Overflow)`. No silent wrapping or
+/// saturation occurs anywhere in this function.
 pub fn apply_accrual(env: &Env, mut line: CreditLineData) -> CreditLineData {
     let now = env.ledger().timestamp();
 
@@ -64,12 +83,14 @@ pub fn apply_accrual(env: &Env, mut line: CreditLineData) -> CreditLineData {
                         GraceWaiverMode::FullWaiver => 0,
                         GraceWaiverMode::ReducedRate => {
                             compute_interest(utilized, cfg.reduced_rate_bps as i128, seconds)
+                                .unwrap_or_else(|e| env.panic_with_error(e))
                         }
                     }
                 } else if accrual_start >= grace_end {
                     // Entire period is after grace window
                     let seconds = (now - accrual_start) as i128;
                     compute_interest(utilized, full_rate, seconds)
+                        .unwrap_or_else(|e| env.panic_with_error(e))
                 } else {
                     // Period straddles the grace boundary
                     let in_window_secs = (grace_end - accrual_start) as i128;
@@ -79,32 +100,41 @@ pub fn apply_accrual(env: &Env, mut line: CreditLineData) -> CreditLineData {
                         GraceWaiverMode::FullWaiver => 0,
                         GraceWaiverMode::ReducedRate => {
                             compute_interest(utilized, cfg.reduced_rate_bps as i128, in_window_secs)
+                                .unwrap_or_else(|e| env.panic_with_error(e))
                         }
                     };
                     let post_window_interest =
-                        compute_interest(utilized, full_rate, post_window_secs);
-                    in_window_interest + post_window_interest
+                        compute_interest(utilized, full_rate, post_window_secs)
+                            .unwrap_or_else(|e| env.panic_with_error(e));
+                    // Checked addition of the two sub-period interests — revert on overflow.
+                    in_window_interest
+                        .checked_add(post_window_interest)
+                        .unwrap_or_else(|| env.panic_with_error(ContractError::Overflow))
                 }
             }
             _ => {
                 let seconds = (now - accrual_start) as i128;
                 compute_interest(utilized, full_rate, seconds)
+                    .unwrap_or_else(|e| env.panic_with_error(e))
             }
         }
     } else {
         let seconds = (now - accrual_start) as i128;
         compute_interest(utilized, full_rate, seconds)
+            .unwrap_or_else(|e| env.panic_with_error(e))
     };
 
     if accrued > 0 {
+        // Accumulate accrued interest into utilized_amount — revert on overflow.
         line.utilized_amount = line
             .utilized_amount
             .checked_add(accrued)
-            .expect("utilized_amount overflow");
+            .unwrap_or_else(|| env.panic_with_error(ContractError::Overflow));
+        // Accumulate running accrued_interest total — revert on overflow.
         line.accrued_interest = line
             .accrued_interest
             .checked_add(accrued)
-            .expect("accrued_interest overflow");
+            .unwrap_or_else(|| env.panic_with_error(ContractError::Overflow));
 
         publish_interest_accrued_event(
             env,
