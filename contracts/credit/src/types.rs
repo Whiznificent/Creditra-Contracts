@@ -123,6 +123,8 @@ pub enum ContractError {
     RepayExceedsMaxAmount = 28,
     /// Borrower attempted to draw again before the cooldown interval elapsed.
     DrawCooldownActive = 29,
+    /// Treasury address is not configured when attempting a treasury withdrawal.
+    TreasuryNotSet = 30,
 }
 
 /// Stored credit line data for a borrower.
@@ -226,7 +228,6 @@ pub struct RateFormulaConfigEvent {
 }
 
 /// Global protocol configuration.
-#[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolConfig {
     /// Configured liquidity token.

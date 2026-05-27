@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-use crate::types::ContractError;
+use crate::types::{ContractError, CreditLineData};
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 /// Storage keys used in instance and persistent storage.
@@ -35,8 +35,12 @@ pub enum DataKey {
     /// Per-borrower max utilization ratio cap in basis points (e.g. 8000 = 80%).
     /// When set, draw_credit enforces: utilized_amount <= credit_limit * cap_bps / 10_000.
     UtilizationCapBps(Address),
-    /// Storage schema version, written once during init.
-    SchemaVersion,
+    /// Protocol fee in basis points applied to interest portion of repayments.
+    ProtocolFeeBps,
+    /// Configured treasury address (where withdrawn fees will be sent).
+    TreasuryAddress,
+    /// Accumulated treasury balance held by the contract (tokens earmarked for treasury).
+    TreasuryBalance,
 }
 
 /// Maximum number of credit lines returned per page.
@@ -278,6 +282,48 @@ pub fn set_last_draw_ts(env: &Env, borrower: &Address, ts: u64) {
     env.storage()
         .persistent()
         .set(&DataKey::LastDrawTs(borrower.clone()), &ts);
+}
+
+/// Get the configured protocol fee in basis points, if any.
+pub fn get_protocol_fee_bps(env: &Env) -> Option<u32> {
+    env.storage().instance().get(&DataKey::ProtocolFeeBps)
+}
+
+/// Set the protocol fee in basis points.
+pub fn set_protocol_fee_bps(env: &Env, bps: u32) {
+    env.storage().instance().set(&DataKey::ProtocolFeeBps, &bps);
+}
+
+/// Get the configured treasury address, if any.
+pub fn get_treasury_address(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::TreasuryAddress)
+}
+
+/// Set the treasury address.
+pub fn set_treasury_address(env: &Env, addr: &Address) {
+    env.storage().instance().set(&DataKey::TreasuryAddress, addr);
+}
+
+/// Get the accumulated treasury balance held in contract (fees collected).
+pub fn get_treasury_balance(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::TreasuryBalance)
+        .unwrap_or(0)
+}
+
+/// Increase the stored treasury balance by `amount` (overflow-checked).
+pub fn add_treasury_balance(env: &Env, amount: i128) {
+    let cur = get_treasury_balance(env);
+    let updated = cur
+        .checked_add(amount)
+        .unwrap_or_else(|| env.panic_with_error(ContractError::Overflow));
+    env.storage().instance().set(&DataKey::TreasuryBalance, &updated);
+}
+
+/// Clear the treasury balance (set to zero).
+pub fn clear_treasury_balance(env: &Env) {
+    env.storage().instance().set(&DataKey::TreasuryBalance, &0_i128);
 }
 
 /// Check whether the protocol is paused.

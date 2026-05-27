@@ -48,13 +48,13 @@ pub const MAX_RISK_SCORE: u32 = 100;
 /// `1` yields `9` bps (`9.99` truncated), not `10`.
 ///
 /// # Parameters
-/// - `score`:        Borrower risk score in the range `0 ..= 100`.
+/// assert_eq!(compute_rate_from_score_linear(50, 200, 800), 500);
 ///                   Values outside this range are accepted but produce
 ///                   extrapolated results; callers should validate first.
-/// - `min_rate_bps`: Rate assigned to a score of `0` (best credit).
+/// assert_eq!(compute_rate_from_score_linear(0, 200, 800), 200);
 /// - `max_rate_bps`: Rate assigned to a score of `100` (worst credit).
 ///
-/// # Returns
+/// assert_eq!(compute_rate_from_score_linear(100, 200, 800), 800);
 /// Interest rate in basis points for the given score, clamped implicitly by
 /// the linear interpolation between `min_rate_bps` and `max_rate_bps`.
 ///
@@ -72,13 +72,14 @@ pub const MAX_RISK_SCORE: u32 = 100;
 /// // Score 100 → max rate
 /// assert_eq!(compute_rate_from_score(100, 200, 800), 800);
 /// ```
-pub fn compute_rate_from_score(score: u32, min_rate_bps: u32, max_rate_bps: u32) -> u32 {
+pub fn compute_rate_from_score_linear(score: u32, min_rate_bps: u32, max_rate_bps: u32) -> u32 {
     assert!(
         max_rate_bps >= min_rate_bps,
         "compute_rate_from_score: max_rate_bps must be >= min_rate_bps"
     );
     let spread = max_rate_bps - min_rate_bps;
     min_rate_bps + spread * score / 100
+}
 /// Compute interest rate from risk score using piecewise-linear formula.
 ///
 /// # Formula
@@ -106,7 +107,7 @@ pub fn compute_rate_from_score(cfg: &RateFormulaConfig, risk_score: u32) -> u32 
 }
 
 /// Set optional global rate-change caps (admin only).
-pub fn set_rate_change_limits(env: Env, max_rate_change_bps: u32, rate_change_min_interval: u64) {
+pub fn set_rate_change_limits_legacy(env: Env, max_rate_change_bps: u32, rate_change_min_interval: u64) {
     assert_not_paused(&env);
     require_admin_auth(&env);
     let cfg = RateChangeConfig {
@@ -321,6 +322,7 @@ pub fn set_rate_change_limits(env: Env, max_rate_change_bps: u32, rate_change_mi
 /// rate changes are unconstrained).
 pub fn get_rate_change_limits(env: Env) -> Option<RateChangeConfig> {
     env.storage().instance().get(&rate_cfg_key(&env))
+}
 /// Retrieve the rate formula configuration from instance storage, if set.
 ///
 /// # Storage

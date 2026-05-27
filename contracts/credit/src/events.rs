@@ -114,6 +114,14 @@ pub struct DrawnEventV2 {
     pub timestamp: u64,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeAccruedEvent {
+    pub borrower: Address,
+    pub fee_amount: i128,
+    pub new_treasury_balance: i128,
+}
+
 pub fn publish_credit_line_event(env: &Env, topic: (Symbol, Symbol), event: CreditLineEvent) {
     env.events().publish(topic, event);
 }
@@ -139,6 +147,11 @@ pub fn publish_draw_reversed_event(env: &Env, event: DrawReversedEvent) {
 pub fn publish_drawn_event_v2(env: &Env, event: DrawnEventV2) {
     env.events()
         .publish((symbol_short!("credit"), symbol_short!("drawn_v2")), event);
+}
+
+pub fn publish_fee_accrued_event(env: &Env, event: FeeAccruedEvent) {
+    env.events()
+    .publish((symbol_short!("credit"), symbol_short!("fee_accrd")), event);
 }
 
 pub fn publish_admin_rotation_proposed(env: &Env, proposed_admin: &Address, accept_after: u64) {

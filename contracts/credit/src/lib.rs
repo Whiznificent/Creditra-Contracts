@@ -15,15 +15,8 @@ mod config;
 pub mod events;
 mod freeze;
 mod lifecycle;
-mod query;
-mod accrual;
 mod math_utils;
-mod risk;
-mod storage;
-pub mod types;
-use crate::storage::{DataKey, rate_cfg_key};
-use crate::auth::require_admin_auth;
-use crate::storage::{clear_reentrancy_guard, set_reentrancy_guard};
+mod query;
 mod risk;
 mod storage;
 pub mod types;
@@ -35,28 +28,28 @@ mod risk_formula_tests;
 
 use crate::auth::require_admin_auth;
 use crate::events::{
-    publish_credit_line_event,
     publish_admin_rotation_accepted, publish_admin_rotation_proposed,
-    publish_drawn_event, publish_interest_accrued_event, publish_repayment_event,
-    publish_borrower_blocked_event,
-    AdminRotationAcceptedEvent, AdminRotationProposedEvent, CreditLineEvent, DrawnEvent,
+    publish_borrower_blocked_event, publish_credit_line_event, publish_drawn_event,
+    publish_interest_accrued_event, publish_repayment_event, CreditLineEvent, DrawnEvent,
     InterestAccruedEvent, RepaymentEvent,
 };
 use crate::math_utils::{mul_div, Rounding};
 use crate::storage::{
-    admin_key, assert_not_paused, clear_reentrancy_guard, proposed_admin_key, proposed_at_key,
-    rate_cfg_key, set_reentrancy_guard, DataKey,
-    set_borrower_blocked as storage_set_borrower_blocked,
-    set_borrower_unblocked,
-    is_borrower_blocked as storage_is_borrower_blocked,
+    admin_key, assert_not_paused, clear_reentrancy_guard, get_borrower_by_credit_line_id,
+    is_borrower_blocked as storage_is_borrower_blocked, persist_credit_line, proposed_admin_key,
+    proposed_at_key, rate_cfg_key, set_borrower_blocked as storage_set_borrower_blocked,
+    set_borrower_unblocked, set_reentrancy_guard, DataKey, MAX_ENUMERATION_LIMIT,
 };
 use crate::types::{
     ContractError, CreditLineData, CreditStatus, GracePeriodConfig, GraceWaiverMode,
-    ProtocolConfig, RateChangeConfig,
+    RateChangeConfig,
 };
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, Symbol, Vec};
 
 pub const CONTRACT_API_VERSION: (u32, u32, u32) = (1, 0, 0);
+
+/// Maximum allowed protocol fee in basis points (1000 = 10%). Adjust if needed.
+const MAX_PROTOCOL_FEE_BPS: u32 = 1_000;
 
 
 #[allow(dead_code)]
@@ -452,6 +445,9 @@ impl Credit {
             amount
         };
 
+        let interest_repaid = effective_repay.min(credit_line.accrued_interest);
+        let _principal_repaid = effective_repay - interest_repaid;
+
         if effective_repay > 0 {
             let maybe_token: Option<Address> =
                 env.storage().instance().get(&DataKey::LiquidityToken);
@@ -465,17 +461,36 @@ impl Credit {
                 let token_client = token::Client::new(&env, &token_address);
                 let contract_address = env.current_contract_address();
 
-                token_client.transfer_from(
-                    &contract_address,
-                    &borrower,
-                    &reserve_address,
-                    &effective_repay,
-                );
+                // Compute protocol fee only on the interest component.
+                let fee_bps: u32 = crate::storage::get_protocol_fee_bps(&env).unwrap_or(0);
+                let mut fee: i128 = 0;
+                if fee_bps > 0 && interest_repaid > 0 {
+                    fee = crate::math_utils::apply_bps(
+                        interest_repaid as u128,
+                        fee_bps,
+                        Rounding::Floor,
+                    ) as i128;
+                }
+
+                // Transfer fee portion into contract (treasury accumulator), then
+                // transfer remaining amount into the reserve.
+                if fee > 0 {
+                    token_client.transfer_from(&contract_address, &borrower, &contract_address, &fee);
+                    crate::storage::add_treasury_balance(&env, fee);
+                    crate::events::publish_fee_accrued_event(&env, crate::events::FeeAccruedEvent {
+                        borrower: borrower.clone(),
+                        fee_amount: fee,
+                        new_treasury_balance: crate::storage::get_treasury_balance(&env),
+                    });
+                }
+
+                let reserve_amount = effective_repay.saturating_sub(fee);
+                if reserve_amount > 0 {
+                    token_client.transfer_from(&contract_address, &borrower, &reserve_address, &reserve_amount);
+                }
             }
         }
 
-        let interest_repaid = effective_repay.min(credit_line.accrued_interest);
-        let _principal_repaid = effective_repay - interest_repaid;
         credit_line.accrued_interest = credit_line
             .accrued_interest
             .checked_sub(interest_repaid)
@@ -654,6 +669,59 @@ impl Credit {
         crate::storage::get_draw_min_interval(&env)
     }
 
+    /// Set protocol fee in basis points (applied to interest portion of repayments).
+    /// Admin only. Fee is bounded by `MAX_PROTOCOL_FEE_BPS`.
+    pub fn set_protocol_fee_bps(env: Env, bps: u32) {
+        require_admin_auth(&env);
+        if bps > MAX_PROTOCOL_FEE_BPS {
+            env.panic_with_error(crate::types::ContractError::Overflow);
+        }
+        crate::storage::set_protocol_fee_bps(&env, bps);
+    }
+
+    /// Get configured protocol fee in basis points, if set.
+    pub fn get_protocol_fee_bps(env: Env) -> Option<u32> {
+        crate::storage::get_protocol_fee_bps(&env)
+    }
+
+    /// Configure the treasury address where withdrawn fees will be sent (admin only).
+    pub fn set_treasury(env: Env, admin: Address, treasury: Address) {
+        admin.require_auth();
+        require_admin_auth(&env);
+        crate::storage::set_treasury_address(&env, &treasury);
+    }
+
+    /// Get configured treasury address, if any.
+    pub fn get_treasury(env: Env) -> Option<Address> {
+        crate::storage::get_treasury_address(&env)
+    }
+
+    /// Withdraw accumulated treasury balance to configured treasury address (admin only).
+    pub fn withdraw_treasury(env: Env, admin: Address) {
+        admin.require_auth();
+        require_admin_auth(&env);
+
+        let treasury_addr = crate::storage::get_treasury_address(&env)
+            .unwrap_or_else(|| env.panic_with_error(crate::types::ContractError::TreasuryNotSet));
+
+        let amount = crate::storage::get_treasury_balance(&env);
+        if amount == 0 {
+            return;
+        }
+
+        let token_address: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::LiquidityToken)
+            .unwrap_or_else(|| env.panic_with_error(crate::types::ContractError::MissingLiquidityToken));
+
+        let token_client = token::Client::new(&env, &token_address);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&contract_address, &treasury_addr, &amount);
+
+        crate::storage::clear_treasury_balance(&env);
+    }
+
     /// Get the current storage schema version.
     pub fn get_schema_version(env: Env) -> Option<u32> {
         crate::storage::get_schema_version(&env)
@@ -808,23 +876,14 @@ impl Credit {
         freeze::is_draws_frozen(&env)
     }
 
-    /// Returns all global protocol configuration in a single call.
-    ///
-    /// Useful for integrators who need to inspect the current state without
-    /// making multiple RPC calls. All fields are deterministic reads from
-    /// instance storage — no side effects.
-    ///
-    /// - `liquidity_token`: `None` until `set_liquidity_token` is called.
-    /// - `liquidity_source`: `None` until `init` is called (defaults to contract address).
-    /// - `rate_change_config`: `None` until `set_rate_change_limits` is called.
-    pub fn get_protocol_config(env: Env) -> ProtocolConfig {
-        ProtocolConfig {
-            liquidity_token: env.storage().instance().get(&DataKey::LiquidityToken),
-            liquidity_source: env.storage().instance().get(&DataKey::LiquiditySource),
-            rate_change_config: env.storage().instance().get(&rate_cfg_key(&env)),
-        }
-    }
 }
+
+
+
+
+
+
+
 
 #[cfg(test)]
 mod test_rate_change_limits {
@@ -4102,5 +4161,7 @@ mod test_max_repay_amount {
         let (client, _admin, _borrower, _token) = setup_with_token(&env);
 
         client.set_max_repay_amount(&0_i128);
+        }
     }
-}
+
+    }
