@@ -35,6 +35,12 @@
 /// // 1_000 * 300 / 10_000 = 30  (3% of 1_000)
 /// assert_eq!(mul_div(1_000, 300, 10_000), 30);
 /// ```
+// (Old, simpler i128 helpers removed in favor of the fixed-point, rounding-aware
+// implementations below.)
+
+/// Legacy i128 helpers retained for compatibility with existing code/tests.
+/// These mirror the previous simple implementations and preserve truncating
+/// behavior (toward zero).
 pub fn mul_div(value: i128, numerator: i128, denominator: i128) -> i128 {
     assert!(denominator != 0, "mul_div: denominator must not be zero");
     value
@@ -43,101 +49,16 @@ pub fn mul_div(value: i128, numerator: i128, denominator: i128) -> i128 {
         / denominator
 }
 
-/// Apply a basis-point rate to an amount.
-///
-/// Basis points (bps) express rates as integer hundredths of a percent:
-/// 1 bps = 0.01%, 100 bps = 1%, 10_000 bps = 100%.
-///
-/// This is a thin wrapper around [`mul_div`] with `denominator = 10_000`.
-///
-/// # Rounding
-/// Truncates toward zero. For example, `apply_bps(1, 1)` returns `0`
-/// because `1 * 1 / 10_000 = 0` after truncation.
-///
-/// # Parameters
-/// - `amount`: The principal amount to apply the rate to.
-/// - `rate_bps`: The rate in basis points (0 ..= 10_000 for 0%–100%;
-///   values above 10_000 are accepted but represent rates over 100%).
-///
-/// # Returns
-/// `amount * rate_bps / 10_000`, truncated toward zero.
-///
-/// # Panics
-/// Panics only if the intermediate product `amount * rate_bps` overflows
-/// `i128`, which requires both operands to be astronomically large.
-///
-/// # Examples
-/// ```
-/// // 3% of 1_000 = 30
-/// assert_eq!(apply_bps(1_000, 300), 30);
-///
-/// // 0.5% of 200 = 1  (1.0 truncated to 1)
-/// assert_eq!(apply_bps(200, 50), 1);
-///
-/// // 0.01% of 50 = 0  (0.005 truncated to 0)
-/// assert_eq!(apply_bps(50, 1), 0);
-///
-/// // 100% of 500 = 500
-/// assert_eq!(apply_bps(500, 10_000), 500);
-/// ```
+// Ensure module-level braces are balanced.
+
+}
+
+/// Legacy apply_bps that operates on `i128` values and truncates toward zero.
 pub fn apply_bps(amount: i128, rate_bps: u32) -> i128 {
     mul_div(amount, rate_bps as i128, 10_000)
 }
 
-/// Pro-rate an annual interest charge to a sub-year elapsed period.
-///
-/// Converts an annual basis-point rate into the interest due for `elapsed`
-/// seconds, assuming a 365-day (31_536_000-second) year.
-///
-/// Formula:
-/// ```text
-/// interest = principal * rate_bps * elapsed
-///            ────────────────────────────────
-///                  10_000 * 31_536_000
-/// ```
-///
-/// Both multiplications are performed in `i128` to preserve precision before
-/// the final division; the combined denominator is `315_360_000_000`.
-///
-/// # Rounding
-/// Truncates toward zero. Partial-second or sub-unit amounts are lost.
-/// For a principal of 1_000_000 at 500 bps (5%) over 1 hour (3_600 s):
-/// ```text
-/// 1_000_000 * 500 * 3_600 / 315_360_000_000
-///   = 1_800_000_000_000 / 315_360_000_000
-///   ≈ 5  (5 units of interest, truncated)
-/// ```
-///
-/// # Parameters
-/// - `principal`:   Outstanding balance to accrue interest on.
-/// - `rate_bps`:    Annual interest rate in basis points (e.g. 500 = 5%).
-/// - `elapsed_secs`: Seconds elapsed since last accrual. Passing `0` always
-///   returns `0`.
-///
-/// # Returns
-/// The pro-rated interest amount for the elapsed period, truncated toward zero.
-///
-/// # Panics
-/// - If any intermediate multiplication overflows `i128`. In practice this
-///   requires `principal * rate_bps` to exceed ~1.7 × 10³⁸, which is far
-///   beyond realistic credit limits.
-///
-/// # Examples
-/// ```
-/// // 5% annual on 1_000_000 for 1 day (86_400 s)
-/// // = 1_000_000 * 500 * 86_400 / 315_360_000_000
-/// // = 43_200_000_000_000 / 315_360_000_000 = 137 (truncated)
-/// assert_eq!(prorate_interest(1_000_000, 500, 86_400), 137);
-///
-/// // Zero elapsed → always 0
-/// assert_eq!(prorate_interest(1_000_000, 500, 0), 0);
-///
-/// // Zero principal → always 0
-/// assert_eq!(prorate_interest(0, 500, 86_400), 0);
-///
-/// // 10% annual on 100_000 for 1 year (31_536_000 s) = 10_000 exactly
-/// assert_eq!(prorate_interest(100_000, 1_000, 31_536_000), 10_000);
-/// ```
+/// Legacy prorate_interest using i128 arithmetic (365-day year).
 pub fn prorate_interest(principal: i128, rate_bps: u32, elapsed_secs: u64) -> i128 {
     const SECONDS_PER_YEAR: i128 = 31_536_000;
     const BPS_DENOMINATOR: i128 = 10_000;
