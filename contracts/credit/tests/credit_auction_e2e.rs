@@ -122,7 +122,7 @@ fn settle_credit_from_auction(
     recovered_amount: i128,
 ) {
     let credit = CreditClient::new(env, &deployment.credit_id);
-    credit.settle_default_liquidation(&deployment.borrower, &recovered_amount, settlement_id);
+    credit.settle_default_liquidation(&deployment.borrower, &recovered_amount, settlement_id, &None);
     assert_event_topic(env, &deployment.credit_id, "credit", "liq_setl");
 }
 

@@ -249,3 +249,33 @@ pub fn publish_borrower_blocked_event(env: &Env, borrower: &Address, blocked: bo
         },
     );
 }
+
+/// Event emitted when the oracle circuit-breaker config is updated.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OracleConfigSetEvent {
+    pub max_deviation_bps: u32,
+    pub max_age_seconds: u64,
+}
+
+/// Event emitted when an oracle price is accepted and stored.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OraclePriceAcceptedEvent {
+    pub price: i128,
+    pub timestamp: u64,
+}
+
+pub fn publish_oracle_config_set_event(env: &Env, max_deviation_bps: u32, max_age_seconds: u64) {
+    env.events().publish(
+        (symbol_short!("credit"), Symbol::new(env, "orc_cfg")),
+        OracleConfigSetEvent { max_deviation_bps, max_age_seconds },
+    );
+}
+
+pub fn publish_oracle_price_accepted_event(env: &Env, price: i128, timestamp: u64) {
+    env.events().publish(
+        (symbol_short!("credit"), Symbol::new(env, "orc_price")),
+        OraclePriceAcceptedEvent { price, timestamp },
+    );
+}

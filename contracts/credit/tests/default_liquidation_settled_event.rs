@@ -101,7 +101,7 @@ fn settle_full_recovery_closes_line_and_event_matches_state() {
     let client = CreditClient::new(&env, &contract_id);
     let settlement_id = Symbol::new(&env, "auc_full_001");
 
-    client.settle_default_liquidation(&borrower, &1_000_i128, &settlement_id);
+    client.settle_default_liquidation(&borrower, &1_000_i128, &settlement_id, &None);
 
     // Check events before the next invocation resets the buffer.
     let event = get_last_liq_setl_event(&env);
@@ -136,7 +136,7 @@ fn settle_partial_recovery_keeps_line_defaulted_and_event_matches_state() {
     let client = CreditClient::new(&env, &contract_id);
     let settlement_id = Symbol::new(&env, "auc_partial_002");
 
-    client.settle_default_liquidation(&borrower, &300_i128, &settlement_id);
+    client.settle_default_liquidation(&borrower, &300_i128, &settlement_id, &None);
 
     // Check events before the next invocation resets the buffer.
     let event = get_last_liq_setl_event(&env);
@@ -171,7 +171,7 @@ fn settle_minimal_partial_recovery_event_matches_state() {
     let client = CreditClient::new(&env, &contract_id);
     let settlement_id = Symbol::new(&env, "auc_min_003");
 
-    client.settle_default_liquidation(&borrower, &1_i128, &settlement_id);
+    client.settle_default_liquidation(&borrower, &1_i128, &settlement_id, &None);
 
     // Check events before the next invocation resets the buffer.
     let event = get_last_liq_setl_event(&env);
@@ -193,7 +193,7 @@ fn settle_near_full_recovery_event_matches_state() {
     let client = CreditClient::new(&env, &contract_id);
     let settlement_id = Symbol::new(&env, "auc_near_004");
 
-    client.settle_default_liquidation(&borrower, &999_i128, &settlement_id);
+    client.settle_default_liquidation(&borrower, &999_i128, &settlement_id, &None);
 
     // Check events before the next invocation resets the buffer.
     let event = get_last_liq_setl_event(&env);
@@ -215,7 +215,7 @@ fn liq_setl_event_field_ordering_is_stable() {
     let client = CreditClient::new(&env, &contract_id);
     let settlement_id = Symbol::new(&env, "auc_order_005");
 
-    client.settle_default_liquidation(&borrower, &200_i128, &settlement_id);
+    client.settle_default_liquidation(&borrower, &200_i128, &settlement_id, &None);
 
     let event = get_last_liq_setl_event(&env);
 
@@ -238,7 +238,7 @@ fn multiple_settlements_each_emit_event_with_correct_state() {
     let client = CreditClient::new(&env, &contract_id);
 
     let sid1 = Symbol::new(&env, "auc_multi_1");
-    client.settle_default_liquidation(&borrower, &400_i128, &sid1);
+    client.settle_default_liquidation(&borrower, &400_i128, &sid1, &None);
 
     // Check first event immediately (before next invocation resets the buffer).
     let event1 = get_last_liq_setl_event(&env);
@@ -252,7 +252,7 @@ fn multiple_settlements_each_emit_event_with_correct_state() {
     assert_eq!(line1.status, CreditStatus::Defaulted);
 
     let sid2 = Symbol::new(&env, "auc_multi_2");
-    client.settle_default_liquidation(&borrower, &600_i128, &sid2);
+    client.settle_default_liquidation(&borrower, &600_i128, &sid2, &None);
 
     // Check second event immediately.
     let event2 = get_last_liq_setl_event(&env);
@@ -274,10 +274,10 @@ fn replay_settlement_with_same_id_panics() {
     let client = CreditClient::new(&env, &contract_id);
     let settlement_id = Symbol::new(&env, "auc_replay_006");
 
-    client.settle_default_liquidation(&borrower, &200_i128, &settlement_id);
+    client.settle_default_liquidation(&borrower, &200_i128, &settlement_id, &None);
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        client.settle_default_liquidation(&borrower, &100_i128, &settlement_id);
+        client.settle_default_liquidation(&borrower, &100_i128, &settlement_id, &None);
     }));
     assert!(result.is_err(), "replay of same settlement_id must panic");
 
@@ -291,7 +291,7 @@ fn settle_zero_recovered_amount_panics() {
     let client = CreditClient::new(&env, &contract_id);
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        client.settle_default_liquidation(&borrower, &0_i128, &Symbol::new(&env, "auc_zero"));
+        client.settle_default_liquidation(&borrower, &0_i128, &Symbol::new(&env, "auc_zero"), &None);
     }));
     assert!(result.is_err());
 
@@ -305,7 +305,7 @@ fn settle_negative_recovered_amount_panics() {
     let client = CreditClient::new(&env, &contract_id);
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        client.settle_default_liquidation(&borrower, &(-100_i128), &Symbol::new(&env, "auc_neg"));
+        client.settle_default_liquidation(&borrower, &(-100_i128), &Symbol::new(&env, "auc_neg"), &None);
     }));
     assert!(result.is_err());
 
@@ -319,7 +319,7 @@ fn settle_over_recovery_panics() {
     let client = CreditClient::new(&env, &contract_id);
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        client.settle_default_liquidation(&borrower, &600_i128, &Symbol::new(&env, "auc_over"));
+        client.settle_default_liquidation(&borrower, &600_i128, &Symbol::new(&env, "auc_over"), &None);
     }));
     assert!(result.is_err());
 
@@ -355,7 +355,7 @@ fn settle_on_active_line_panics() {
     client.draw_credit(&borrower, &1_000_i128);
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        client.settle_default_liquidation(&borrower, &500_i128, &Symbol::new(&env, "auc_active"));
+        client.settle_default_liquidation(&borrower, &500_i128, &Symbol::new(&env, "auc_active"), &None);
     }));
     assert!(result.is_err());
 
@@ -377,7 +377,7 @@ fn settle_on_nonexistent_line_panics() {
     client.init(&admin);
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        client.settle_default_liquidation(&borrower, &100_i128, &Symbol::new(&env, "auc_nonex"));
+        client.settle_default_liquidation(&borrower, &100_i128, &Symbol::new(&env, "auc_nonex"), &None);
     }));
     assert!(result.is_err());
 }

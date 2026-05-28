@@ -126,6 +126,12 @@ pub enum ContractError {
     DrawCooldownActive = 29,
     /// Treasury address is not configured when attempting a treasury withdrawal.
     TreasuryNotSet = 30,
+    /// Oracle price deviates more than the configured max_deviation_bps from the last accepted price.
+    OraclePriceDeviation = 31,
+    /// Oracle price timestamp is older than the configured max_age_seconds.
+    OraclePriceStale = 32,
+    /// Oracle price is zero or negative, which is invalid.
+    OraclePriceInvalid = 33,
 }
 
 /// Stored credit line data for a borrower.
@@ -230,6 +236,25 @@ pub enum GraceWaiverMode {
     FullWaiver = 0,
     /// Reduced rate - apply reduced_rate_bps during grace period.
     ReducedRate = 1,
+}
+
+/// Oracle circuit-breaker configuration.
+///
+/// When set, `settle_default_liquidation` validates the supplied `oracle_price`
+/// against the last accepted price and the current ledger timestamp before
+/// applying the settlement.
+///
+/// # Invariants
+/// - `max_deviation_bps` must be in `1..=10_000` (0.01 % – 100 %).
+/// - `max_age_seconds` must be > 0.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OracleConfig {
+    /// Maximum allowed price deviation from the last accepted price, in basis points.
+    /// E.g. 500 = 5 %.
+    pub max_deviation_bps: u32,
+    /// Maximum age of an oracle price in seconds before it is considered stale.
+    pub max_age_seconds: u64,
 }
 
 /// Event emitted when the rate formula config is set or cleared.

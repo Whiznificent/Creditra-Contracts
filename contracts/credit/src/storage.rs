@@ -37,8 +37,20 @@ pub enum DataKey {
     UtilizationCapBps(Address),
     /// Per-borrower installment schedule for delinquency tracking.
     RepaymentSchedule(Address),
-    /// Storage schema version, written once during init.
-    SchemaVersion,
+    /// Global maximum total exposure cap across all credit lines.
+    MaxTotalExposure,
+    /// Protocol fee in basis points collected on draws.
+    ProtocolFeeBps,
+    /// Treasury address for fee collection.
+    TreasuryAddress,
+    /// Accumulated treasury balance held in contract.
+    TreasuryBalance,
+    /// Oracle circuit-breaker configuration (max_deviation_bps, max_age_seconds).
+    OracleConfig,
+    /// Last accepted oracle price (i128, scaled by 1e7 or as reported).
+    OracleLastPrice,
+    /// Timestamp of the last accepted oracle price.
+    OracleLastPriceTs,
 }
 
 /// Maximum number of credit lines returned per page.
@@ -484,4 +496,32 @@ pub fn assert_ts_monotonic(env: &Env, stored_ts: u64, new_ts: u64) {
     if stored_ts != 0 && new_ts <= stored_ts {
         env.panic_with_error(crate::types::ContractError::TimestampRegression);
     }
+}
+
+// ── Oracle circuit-breaker storage ───────────────────────────────────────────
+
+/// Get the oracle circuit-breaker config, if set.
+pub fn get_oracle_config(env: &Env) -> Option<crate::types::OracleConfig> {
+    env.storage().instance().get(&DataKey::OracleConfig)
+}
+
+/// Set the oracle circuit-breaker config.
+pub fn set_oracle_config(env: &Env, cfg: &crate::types::OracleConfig) {
+    env.storage().instance().set(&DataKey::OracleConfig, cfg);
+}
+
+/// Get the last accepted oracle price, if any.
+pub fn get_oracle_last_price(env: &Env) -> Option<i128> {
+    env.storage().instance().get(&DataKey::OracleLastPrice)
+}
+
+/// Get the timestamp of the last accepted oracle price, if any.
+pub fn get_oracle_last_price_ts(env: &Env) -> Option<u64> {
+    env.storage().instance().get(&DataKey::OracleLastPriceTs)
+}
+
+/// Persist a newly accepted oracle price and its timestamp.
+pub fn set_oracle_last_price(env: &Env, price: i128, ts: u64) {
+    env.storage().instance().set(&DataKey::OracleLastPrice, &price);
+    env.storage().instance().set(&DataKey::OracleLastPriceTs, &ts);
 }

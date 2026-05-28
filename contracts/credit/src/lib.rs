@@ -32,8 +32,9 @@ use crate::events::{
     publish_borrower_blocked_event, publish_credit_line_event, publish_drawn_event,
     publish_interest_accrued_event, publish_repayment_event, CreditLineEvent, DrawnEvent,
     InterestAccruedEvent, RepaymentEvent,
+    publish_oracle_config_set_event, publish_oracle_price_accepted_event,
 };
-use crate::math_utils::{mul_div, Rounding};
+use crate::math_utils::{mul_div, Rounding, compute_deviation_bps};
 use crate::storage::{
     admin_key, assert_not_paused, clear_reentrancy_guard, proposed_admin_key, proposed_at_key,
     rate_cfg_key, set_reentrancy_guard, DataKey, persist_credit_line,
@@ -42,10 +43,12 @@ use crate::storage::{
     set_borrower_unblocked,
     is_borrower_blocked as storage_is_borrower_blocked,
     clear_repayment_schedule,
+    get_oracle_config, set_oracle_config, get_oracle_last_price, get_oracle_last_price_ts,
+    set_oracle_last_price,
 };
 use crate::types::{
     ContractError, CreditLineData, CreditStatus, GracePeriodConfig, GraceWaiverMode,
-    RateChangeConfig,
+    OracleConfig, RateChangeConfig,
 };
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, Symbol, Vec};
 
@@ -843,8 +846,79 @@ impl Credit {
         borrower: Address,
         recovered_amount: i128,
         settlement_id: Symbol,
+        oracle_price: Option<i128>,
     ) {
+        // Oracle price-feed circuit breaker: validate price before settlement.
+        if let Some(cfg) = get_oracle_config(&env) {
+            let price = oracle_price.unwrap_or_else(|| {
+                env.panic_with_error(ContractError::OraclePriceInvalid)
+            });
+
+            if price <= 0 {
+                env.panic_with_error(ContractError::OraclePriceInvalid);
+            }
+
+            let now = env.ledger().timestamp();
+
+            // Staleness check: price timestamp must be recent enough.
+            // The caller supplies the oracle price; we track when it was last accepted.
+            // On first call (no stored price), we accept and store without deviation check.
+            if let Some(last_ts) = get_oracle_last_price_ts(&env) {
+                let age = now.saturating_sub(last_ts);
+                if age > cfg.max_age_seconds {
+                    env.panic_with_error(ContractError::OraclePriceStale);
+                }
+
+                // Deviation check against last accepted price.
+                if let Some(last_price) = get_oracle_last_price(&env) {
+                    let deviation = compute_deviation_bps(price, last_price)
+                        .unwrap_or_else(|| env.panic_with_error(ContractError::OraclePriceInvalid));
+                    if deviation > cfg.max_deviation_bps {
+                        env.panic_with_error(ContractError::OraclePriceDeviation);
+                    }
+                }
+            }
+
+            // Accept and persist the new price.
+            set_oracle_last_price(&env, price, now);
+            publish_oracle_price_accepted_event(&env, price, now);
+        }
+
         lifecycle::settle_default_liquidation(env, borrower, recovered_amount, settlement_id)
+    }
+
+    // ── Oracle circuit-breaker admin ──────────────────────────────────────────
+
+    /// Configure the oracle price-feed circuit breaker thresholds.
+    ///
+    /// Once set, `settle_default_liquidation` requires a valid `oracle_price`
+    /// that is within `max_deviation_bps` of the last accepted price and whose
+    /// stored timestamp is no older than `max_age_seconds`.
+    ///
+    /// # Validation
+    /// - `max_deviation_bps` must be in `1..=10_000`.
+    /// - `max_age_seconds` must be > 0.
+    ///
+    /// # Authorization
+    /// Admin only.
+    pub fn set_oracle_config(env: Env, max_deviation_bps: u32, max_age_seconds: u64) {
+        assert_not_paused(&env);
+        require_admin_auth(&env);
+
+        if max_deviation_bps == 0 || max_deviation_bps > 10_000 {
+            env.panic_with_error(ContractError::InvalidAmount);
+        }
+        if max_age_seconds == 0 {
+            env.panic_with_error(ContractError::InvalidAmount);
+        }
+
+        set_oracle_config(&env, &OracleConfig { max_deviation_bps, max_age_seconds });
+        publish_oracle_config_set_event(&env, max_deviation_bps, max_age_seconds);
+    }
+
+    /// Return the current oracle circuit-breaker configuration, if set.
+    pub fn get_oracle_config(env: Env) -> Option<OracleConfig> {
+        get_oracle_config(&env)
     }
 
     // ── Borrower blocklist ────────────────────────────────────────────────────

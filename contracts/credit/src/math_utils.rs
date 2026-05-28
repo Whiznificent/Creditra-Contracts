@@ -275,6 +275,46 @@ pub fn prorate_interest(
     }
 }
 
+// ─── Oracle deviation helper ──────────────────────────────────────────────────
+
+/// Compute the absolute deviation between `new_price` and `last_price` in basis points.
+///
+/// # Formula
+/// ```text
+/// deviation_bps = |new_price - last_price| * 10_000 / last_price
+/// ```
+///
+/// Returns `None` if `last_price` is zero (undefined).
+///
+/// # Overflow safety
+/// Intermediate arithmetic is performed in `u128`. For realistic price values
+/// (≤ i128::MAX ≈ 1.7 × 10^38) the product `diff * 10_000` fits in u128.
+///
+/// # Examples
+/// ```rust
+/// use creditra_credit::math_utils::compute_deviation_bps;
+///
+/// // 5% deviation: last=1000, new=1050 → 500 bps
+/// assert_eq!(compute_deviation_bps(1050, 1000), Some(500));
+///
+/// // 5% deviation downward: last=1000, new=950 → 500 bps
+/// assert_eq!(compute_deviation_bps(950, 1000), Some(500));
+///
+/// // Zero last price → None
+/// assert_eq!(compute_deviation_bps(100, 0), None);
+/// ```
+pub fn compute_deviation_bps(new_price: i128, last_price: i128) -> Option<u32> {
+    if last_price <= 0 {
+        return None;
+    }
+    let diff = (new_price - last_price).unsigned_abs();
+    // diff * 10_000 / last_price — both operands are u128
+    let numerator = diff.checked_mul(BPS_DENOMINATOR)?;
+    let deviation = numerator / (last_price as u128);
+    // Cap at u32::MAX to avoid truncation; any value > 10_000 already exceeds any threshold
+    Some(deviation.min(u32::MAX as u128) as u32)
+}
+
 // ─── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -687,5 +727,46 @@ mod tests {
         let floor = prorate_interest(p, r, t, Rounding::Floor);
         let ceil = prorate_interest(p, r, t, Rounding::Ceil);
         assert_eq!(floor, ceil, "exact division should give floor == ceil");
+    }
+
+    // ── compute_deviation_bps ─────────────────────────────────────────────────
+
+    #[test]
+    fn deviation_five_percent_up() {
+        // 1050 vs 1000 → 50/1000 * 10_000 = 500 bps
+        assert_eq!(compute_deviation_bps(1_050, 1_000), Some(500));
+    }
+
+    #[test]
+    fn deviation_five_percent_down() {
+        // 950 vs 1000 → 50/1000 * 10_000 = 500 bps
+        assert_eq!(compute_deviation_bps(950, 1_000), Some(500));
+    }
+
+    #[test]
+    fn deviation_zero_change() {
+        assert_eq!(compute_deviation_bps(1_000, 1_000), Some(0));
+    }
+
+    #[test]
+    fn deviation_one_bps() {
+        // 10_001 vs 10_000 → 1/10_000 * 10_000 = 1 bps
+        assert_eq!(compute_deviation_bps(10_001, 10_000), Some(1));
+    }
+
+    #[test]
+    fn deviation_hundred_percent() {
+        // 2000 vs 1000 → 1000/1000 * 10_000 = 10_000 bps
+        assert_eq!(compute_deviation_bps(2_000, 1_000), Some(10_000));
+    }
+
+    #[test]
+    fn deviation_zero_last_price_returns_none() {
+        assert_eq!(compute_deviation_bps(100, 0), None);
+    }
+
+    #[test]
+    fn deviation_negative_last_price_returns_none() {
+        assert_eq!(compute_deviation_bps(100, -1), None);
     }
 }

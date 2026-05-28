@@ -70,7 +70,7 @@ fn settle_partial_default_liquidation_and_block_replay() {
     let client = CreditClient::new(&env, &contract_id);
     let settlement_id = Symbol::new(&env, "auc_001");
 
-    client.settle_default_liquidation(&borrower, &300_i128, &settlement_id);
+    client.settle_default_liquidation(&borrower, &300_i128, &settlement_id, &None);
     assert!(has_event_topic(&env, "liq_setl"));
 
     let line = client.get_credit_line(&borrower).unwrap();
@@ -78,7 +78,7 @@ fn settle_partial_default_liquidation_and_block_replay() {
     assert_eq!(line.utilized_amount, 700);
 
     let replay = catch_unwind(AssertUnwindSafe(|| {
-        client.settle_default_liquidation(&borrower, &50_i128, &settlement_id);
+        client.settle_default_liquidation(&borrower, &50_i128, &settlement_id, &None);
     }));
     assert!(replay.is_err(), "replay settlement should panic");
 }
@@ -88,7 +88,7 @@ fn settle_full_default_liquidation_closes_credit_line() {
     let (env, contract_id, borrower) = setup_defaulted_line(450);
     let client = CreditClient::new(&env, &contract_id);
 
-    client.settle_default_liquidation(&borrower, &450_i128, &Symbol::new(&env, "auc_fin"));
+    client.settle_default_liquidation(&borrower, &450_i128, &Symbol::new(&env, "auc_fin"), &None);
     assert!(has_event_topic(&env, "closed"));
     assert!(has_event_topic(&env, "liq_setl"));
 
@@ -125,7 +125,7 @@ fn settle_default_liquidation_requires_defaulted_status() {
     client.draw_credit(&borrower, &500_i128);
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        client.settle_default_liquidation(&borrower, &100_i128, &Symbol::new(&env, "auc_bad"));
+        client.settle_default_liquidation(&borrower, &100_i128, &Symbol::new(&env, "auc_bad"), &None);
     }));
 
     assert!(result.is_err(), "non-defaulted settlement should panic");
