@@ -437,13 +437,16 @@ pub fn settle_default_liquidation(
 
 // ── reinstate_credit_line ─────────────────────────────────────────────────────
 
-/// Reinstate a `Defaulted` credit line to either `Active` or `Suspended` (admin only).
+/// Reinstate a `Defaulted` credit line to either `Active` or `Restricted` (admin only).
 ///
-/// Allowed only when current status is `Defaulted`. Transition: `Defaulted` → `Active`.
+/// Valid transitions: `Defaulted` → `Active` | `Defaulted` → `Restricted`.
+/// `Restricted` is used when the credit limit was reduced below the outstanding balance
+/// and the borrower must repay the excess before draws are re-enabled.
 ///
 /// # Panics
-/// - `"Credit line not found"` — no credit line exists for `borrower`.
-/// - `"credit line is not defaulted"` — current status is not `Defaulted`.
+/// - `ContractError::InvalidAmount` — `target_status` is not `Active` or `Restricted`.
+/// - `ContractError::CreditLineNotFound` — no credit line exists for `borrower`.
+/// - `ContractError::CreditLineDefaulted` — current status is not `Defaulted`.
 ///
 /// # Events
 /// Emits a `("credit", "reinstate")` [`CreditLineEvent`].
@@ -451,7 +454,8 @@ pub fn reinstate_credit_line(env: Env, borrower: Address, target_status: CreditS
     assert_not_paused(&env);
     require_admin_auth(&env);
 
-    if target_status != CreditStatus::Active && target_status != CreditStatus::Suspended {
+    // Only Active and Restricted are valid reinstate targets per the state-machine spec.
+    if target_status != CreditStatus::Active && target_status != CreditStatus::Restricted {
         env.panic_with_error(ContractError::InvalidAmount);
     }
 

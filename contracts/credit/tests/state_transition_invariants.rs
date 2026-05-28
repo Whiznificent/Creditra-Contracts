@@ -678,6 +678,84 @@ fn reinstate_only_valid_from_defaulted() {
     }
 }
 
+// ── reinstate target_status coverage (#task/reinstate-target-status-tests) ───
+
+/// Defaulted → Active: the canonical reinstate path.
+/// Debt and interest are unchanged; status flips to Active.
+#[test]
+fn reinstate_defaulted_to_active() {
+    let (env, _admin, contract_id) = setup_env();
+    let client = CreditClient::new(&env, &contract_id);
+    let borrower = open_line(&env, &contract_id, 1_000, 500);
+
+    client.default_credit_line(&borrower);
+    assert_eq!(
+        client.get_credit_line(&borrower).unwrap().status,
+        CreditStatus::Defaulted
+    );
+
+    client.reinstate_credit_line(&borrower, &CreditStatus::Active);
+    let line = client.get_credit_line(&borrower).unwrap();
+
+    assert_eq!(line.status, CreditStatus::Active);
+    assert_accounting_invariant(&line, "reinstate to Active");
+}
+
+/// Defaulted → Restricted: valid when the admin wants to cap draws while
+/// requiring the borrower to repay the excess balance first.
+#[test]
+fn reinstate_defaulted_to_restricted() {
+    let (env, _admin, contract_id) = setup_env();
+    let client = CreditClient::new(&env, &contract_id);
+    let borrower = open_line(&env, &contract_id, 1_000, 500);
+
+    client.default_credit_line(&borrower);
+    let before = client.get_credit_line(&borrower).unwrap();
+    assert_eq!(before.status, CreditStatus::Defaulted);
+
+    client.reinstate_credit_line(&borrower, &CreditStatus::Restricted);
+    let line = client.get_credit_line(&borrower).unwrap();
+
+    assert_eq!(line.status, CreditStatus::Restricted);
+    // Debt must be preserved — reinstate never alters balances.
+    assert_eq!(line.utilized_amount, before.utilized_amount);
+    assert_eq!(line.accrued_interest, before.accrued_interest);
+    assert_accounting_invariant(&line, "reinstate to Restricted");
+}
+
+/// Reinstating to Closed, Defaulted, or Suspended must revert.
+/// These targets are outside the allowed set per the state-machine spec.
+#[test]
+fn reinstate_invalid_targets_revert() {
+    for bad_target in [
+        CreditStatus::Closed,
+        CreditStatus::Defaulted,
+        CreditStatus::Suspended,
+    ] {
+        let (env, _admin, contract_id) = setup_env();
+        let client = CreditClient::new(&env, &contract_id);
+        let borrower = open_line(&env, &contract_id, 1_000, 0);
+
+        client.default_credit_line(&borrower);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.reinstate_credit_line(&borrower, &bad_target);
+        }));
+        assert!(
+            result.is_err(),
+            "reinstate to {bad_target:?} must revert"
+        );
+
+        // Line must remain Defaulted — no partial state change.
+        let line = client.get_credit_line(&borrower).unwrap();
+        assert_eq!(
+            line.status,
+            CreditStatus::Defaulted,
+            "status must stay Defaulted after failed reinstate to {bad_target:?}"
+        );
+    }
+}
+
 /// Accrued interest is materialized (not lost) when transitioning Active → Suspended.
 /// Verifies the interest-continues-to-accrue-until-checkpoint behaviour.
 #[test]
