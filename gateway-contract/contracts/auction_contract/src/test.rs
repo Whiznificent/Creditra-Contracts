@@ -5,13 +5,15 @@ mod tests {
     use crate::errors::AuctionError;
     use core::convert::TryFrom;
     use core::ops::Range;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::vec::Vec;
 
     use soroban_sdk::testutils::{Address as _, Ledger};
     use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::testutils::{Ledger, MockAuth, MockAuthInvoke};
     use soroban_sdk::testutils::Ledger as _;
     use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
-    use soroban_sdk::{Address, Env, Symbol, TryFromVal, TryIntoVal};
+    use soroban_sdk::{Address, Env, IntoVal, Symbol, TryFromVal, TryIntoVal};
 
     const REFUND_TOPIC: &str = "BID_RFDN";
     const SETTLEMENT_TOPIC: &str = "LIQ_SETL";
@@ -284,6 +286,7 @@ mod tests {
 
         client.init_auction(&auction_id, &0, &u64::MAX, &1_i128, &0_u32);
 
+        let mut seed: u64 = 0x11ce_f00d_cafe_beef;
         let mut seed: u64 = 0xdeadbeef_cafe_beef;
         let mut highest = 0_i128;
         for _ in 0..8 {
@@ -324,8 +327,11 @@ mod tests {
         let contract_id = env.register(Auction, ());
         let client = AuctionClient::new(&env, &contract_id);
         let bidder = Address::generate(&env);
+        let factory = Address::generate(&env);
         let auction_id = Symbol::new(&env, "liq_open");
 
+        client.set_factory_contract(&factory);
+        client.init_auction(&auction_id, &0, &1000, &50_i128);
         client.init_auction(&auction_id, &0, &1000, &50_i128, &0_u32);
         client.place_bid(&auction_id, &bidder, &100_i128);
 
@@ -348,8 +354,11 @@ mod tests {
         let bidder = Address::generate(&env);
         let borrower = Address::generate(&env);
         let credit_contract = Address::generate(&env);
+        let factory = Address::generate(&env);
         let auction_id = Symbol::new(&env, "liq_closed");
 
+        client.set_factory_contract(&factory);
+        client.init_auction(&auction_id, &0, &1000, &50_i128);
         client.init_auction(&auction_id, &0, &1000, &50_i128, &0_u32);
         client.place_bid(&auction_id, &bidder, &420_i128);
         client.close_auction(&auction_id);
@@ -363,7 +372,28 @@ mod tests {
         assert_eq!(evt.borrower, borrower);
         assert_eq!(evt.winner, bidder);
         assert_eq!(evt.recovered_amount, 420_i128);
+    }
 
+    #[test]
+    #[should_panic]
+    fn settle_default_liquidation_replay_reverts() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(Auction, ());
+        let client = AuctionClient::new(&env, &contract_id);
+
+        let factory = Address::generate(&env);
+        let borrower = Address::generate(&env);
+        let credit_contract = Address::generate(&env);
+        let auction_id = Symbol::new(&env, "liq_replay");
+
+        client.set_factory_contract(&factory);
+        client.init_auction(&auction_id, &0, &1000, &50_i128);
+        client.close_auction(&auction_id);
+        client.settle_default_liquidation(&auction_id, &credit_contract, &borrower);
+        // second call must panic
+        client.settle_default_liquidation(&auction_id, &credit_contract, &borrower);
         let replay =
             client.try_settle_default_liquidation(&auction_id, &credit_contract, &borrower);
         assert!(replay.is_err(), "settlement replay should panic");
@@ -379,8 +409,11 @@ mod tests {
 
         let borrower = Address::generate(&env);
         let credit_contract = Address::generate(&env);
+        let factory = Address::generate(&env);
         let auction_id = Symbol::new(&env, "zero_bid");
 
+        client.set_factory_contract(&factory);
+        client.init_auction(&auction_id, &0, &1000, &50_i128);
         client.init_auction(&auction_id, &0, &1000, &50_i128, &0_u32);
         // no bids
         client.close_auction(&auction_id);
@@ -391,6 +424,89 @@ mod tests {
         let evt = events.last().unwrap();
         assert_eq!(evt.winner, borrower);
         assert_eq!(evt.recovered_amount, 0_i128);
+    }
+
+    // --- factory auth negative tests ---
+
+    #[test]
+    fn settle_default_liquidation_reverts_when_factory_unset() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(Auction, ());
+        let client = AuctionClient::new(&env, &contract_id);
+        let auction_id = Symbol::new(&env, "no_factory");
+
+        // No set_factory_contract call — factory is unset
+        client.init_auction(&auction_id, &0, &1000, &50_i128);
+        client.close_auction(&auction_id);
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            client.settle_default_liquidation(
+                &auction_id,
+                &Address::generate(&env),
+                &Address::generate(&env),
+            );
+        }));
+
+        assert!(result.is_err(), "should revert when factory contract is unset");
+    }
+
+    #[test]
+    fn settle_default_liquidation_reverts_for_wrong_caller() {
+        let env = Env::default();
+        let contract_id = env.register(Auction, ());
+        let client = AuctionClient::new(&env, &contract_id);
+
+        let factory = Address::generate(&env);
+        let borrower = Address::generate(&env);
+        let credit_contract = Address::generate(&env);
+        let auction_id = Symbol::new(&env, "wrong_caller");
+
+        // Setup: register factory and close an auction
+        env.mock_all_auths();
+        client.set_factory_contract(&factory);
+        client.init_auction(&auction_id, &0, &1000, &50_i128);
+        client.close_auction(&auction_id);
+
+        // Attempt settlement with no auth provided — factory.require_auth() will reject
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // Create a fresh env without mock_all_auths so require_auth fails
+            let env2 = Env::default();
+            let contract_id2 = env2.register(Auction, ());
+            let client2 = AuctionClient::new(&env2, &contract_id2);
+            let factory2 = Address::generate(&env2);
+            let auction_id2 = Symbol::new(&env2, "wrong_caller2");
+            // Setup with mocks
+            env2.mock_all_auths();
+            client2.set_factory_contract(&factory2);
+            client2.init_auction(&auction_id2, &0, &1000, &50_i128);
+            client2.close_auction(&auction_id2);
+            // Call with only a non-factory address authorized
+            let wrong_caller = Address::generate(&env2);
+            client2
+                .mock_auths(&[soroban_sdk::testutils::MockAuth {
+                    address: &wrong_caller,
+                    invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                        contract: &contract_id2,
+                        fn_name: "settle_default_liquidation",
+                        args: (
+                            auction_id2.clone(),
+                            Address::generate(&env2),
+                            Address::generate(&env2),
+                        )
+                            .into_val(&env2),
+                        sub_invokes: &[],
+                    },
+                }])
+                .settle_default_liquidation(
+                    &auction_id2,
+                    &Address::generate(&env2),
+                    &Address::generate(&env2),
+                );
+        }));
+
+        assert!(result.is_err(), "wrong caller should be rejected");
     }
 
     #[test]

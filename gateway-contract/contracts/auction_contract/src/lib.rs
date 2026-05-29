@@ -9,6 +9,7 @@ use errors::AuctionError;
 
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol};
 
+use crate::errors::AuctionError;
 use crate::types::*;
 use events::{
     publish_auction_closed_event, publish_bid_refunded_event,
@@ -79,6 +80,13 @@ impl Auction {
         };
         env.storage().persistent().set(&auction_id, &state);
         bump_auction_state_ttl(&env, &auction_id);
+    }
+
+    /// Register the factory/credit contract address that is permitted to call
+    /// `settle_default_liquidation`. Must be called once after deployment.
+    pub fn set_factory_contract(env: Env, factory: Address) {
+        factory.require_auth();
+        storage::set_factory_contract(&env, &factory);
     }
 
     pub fn close_auction(env: Env, auction_id: Symbol) {
@@ -165,6 +173,7 @@ impl Auction {
     /// Emit an auction settlement signal for credit default liquidation orchestration.
     ///
     /// Requirements:
+    /// - caller must be the registered factory contract (`set_factory_contract`)
     /// - auction must be closed
     /// - settlement signal is one-time per auction_id
     pub fn settle_default_liquidation(
@@ -173,6 +182,11 @@ impl Auction {
         credit_contract: Address,
         borrower: Address,
     ) {
+        // --- factory-only caller check ---
+        let factory = storage::get_factory_contract(&env)
+            .ok_or(AuctionError::NoFactoryContract)
+            .unwrap_or_else(|_| panic!("no factory contract set"));
+        factory.require_auth();
         let state: AuctionState = env
             .storage()
             .persistent()
@@ -198,6 +212,7 @@ impl Auction {
         env.storage().persistent().set(&settlement_key, &true);
         bump_settlement_marker_ttl(&env, &settlement_key);
 
+        let winner = state.highest_bidder.unwrap_or(borrower.clone());
         let winner = state.highest_bidder.unwrap_or_else(|| borrower.clone());
         publish_default_liquidation_settlement_event(
             &env,
