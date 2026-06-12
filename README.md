@@ -129,7 +129,17 @@ See [Stellar Soroban docs](https://developers.stellar.org/docs/smart-contracts) 
 - `Cargo.toml` — workspace and release profile (opt for contract size)
 - `contracts/credit/` — credit line contract
   - `Cargo.toml` — crate config, soroban-sdk dependency
-  - `src/lib.rs` — contract types and impl (stubs)
+  - `src/lib.rs` — contract entrypoints (`#[contractimpl]`)
+  - `src/types.rs` — `CreditLineData`, `ContractError`, config structs
+  - `src/storage.rs` — persistent/instance storage keys and helpers
+  - `src/auth.rs` — admin access control
+  - `src/risk.rs` / `src/accrual.rs` — rate formula and interest accrual
+  - `src/lifecycle.rs` — open/suspend/default/reinstate/close state transitions
+  - `src/borrow.rs` / `src/collateral.rs` / `src/freeze.rs` — draw, collateral, freeze helpers
+- `gateway-contract/contracts/auction_contract/` — auction contract used
+  in credit-contract integration tests to exercise the default-liquidation hook
+- `docs/` — protocol-level reference (errors, state-machine, threat model, etc.)
+- `scripts/` — operator-facing helpers (build, coverage cleanup, introspection)
 
 ## Merging to remote
 
