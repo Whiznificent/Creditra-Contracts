@@ -4,6 +4,28 @@ use crate::types::{ContractError, CreditLineData, RepaymentSchedule};
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 /// Storage keys used in instance and persistent storage.
+///
+/// # Storage tier convention
+///
+/// Variants in this enum are referenced from **two** Soroban storage tiers:
+///
+/// - **Instance storage** for global, single-row config and counters
+///   (`LiquidityToken`, `LiquiditySource`, `DrawsFrozen`, `SchemaVersion`,
+///   `CreditLineCount`, `TotalUtilized`, `MaxDrawAmount`, `MaxRepayAmount`,
+///   `DrawMinIntervalSeconds`, `MinCreditLimit`, `MaxCreditLimit`,
+///   `PenaltySurchargeBps`, `AuctionContract`, `MaxTotalExposure`,
+///   `ProtocolFeeBps`, `TreasuryAddress`, `TreasuryBalance`,
+///   `MinCollateralRatioBps`, `OracleConfig`, `OracleLastPrice`,
+///   `OracleLastPriceTs`).
+/// - **Persistent storage** for per-borrower / per-timestamp data
+///   (`CreditLineIdByBorrower`, `CreditLineBorrowerById`, `LastDrawTs`,
+///   `BlockedBorrower`, `UtilizationCapBps`, `RateFloorBps`,
+///   `RepaymentSchedule`, `CollateralBalance`, `DrawAudit`,
+///   `DrawReversedAmount`).
+///
+/// Helper functions in this module always pick the correct tier; callers
+/// outside this module should never hit the storage API directly with these
+/// keys.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
