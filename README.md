@@ -36,9 +36,9 @@ This repo contains the **credit** contract: it maintains credit lines, tracks ut
 
 ### Interest accrual design
 
-- The contract already reserves `accrued_interest` and `last_accrual_ts` in storage for lazy interest accounting.
-- The design note for implementing accrual is documented in [`docs/interest-accrual.md`](docs/interest-accrual.md).
-- Current code does not yet apply periodic accrual to balances; the new document defines the intended behavior before implementation.
+- The contract reserves `accrued_interest` and `last_accrual_ts` on every `CreditLineData` for lazy interest accounting.
+- The full design note is in [`docs/interest-accrual.md`](docs/interest-accrual.md); the design follows a *checkpoint-on-mutation* model, so reads never write storage.
+- Accrual is folded into the utilized principal on draw, repay, and risk-parameter updates — there is no separate cron-driven settlement.
 
 ### Risk-score based rate formula
 
