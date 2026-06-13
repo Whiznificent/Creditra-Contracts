@@ -14,11 +14,13 @@ a **50 KB hard CI budget**.
 | Doc | What it answers |
 |---|---|
 | [`WHITEPAPER.md`](./WHITEPAPER.md) | Why and how — protocol-level model, math, comparison vs Aave/Compound/Maker |
+| [`docs/INDEX.md`](./docs/INDEX.md) | Audience-routed entry point (reviewer / auditor / integrator / operator / contributor) |
 | [`docs/PROTOCOL_SPEC.md`](./docs/PROTOCOL_SPEC.md) | Per-module contract surface: every entrypoint, every storage key, every error |
 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | System & sequence diagrams (mermaid); call topology |
 | [`docs/RISK_PRICING.md`](./docs/RISK_PRICING.md) | The risk-pricing algorithm in depth, with worked numerical examples |
 | [`docs/SECURITY.md`](./docs/SECURITY.md) | Threat model, auditor checklist, bug bounty scope |
 | [`docs/EXECUTION_QUALITY.md`](./docs/EXECUTION_QUALITY.md) | Test catalog, CI matrix, deployment checklists, PR cadence |
+| [`docs/GLOSSARY.md`](./docs/GLOSSARY.md) | Project terminology with source citations |
 
 ---
 
