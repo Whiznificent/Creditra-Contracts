@@ -1,5 +1,63 @@
 // SPDX-License-Identifier: MIT
 
+//! Storage abstraction for the Credit contract.
+//!
+//! # What
+//!
+//! Defines the [`DataKey`] enum (30 variants) and provides typed getters /
+//! setters for every persistent and instance storage slot in the credit
+//! contract. Also owns the reentrancy guard, pause flag, monotonic-timestamp
+//! assertion, and the per-borrower id ↔ address mapping used by enumeration.
+//!
+//! # How
+//!
+//! Variants are partitioned across Soroban's two long-lived storage tiers:
+//!
+//! - **Instance storage** — small, hot, always loaded with the contract.
+//!   Holds admin/proposal/pause state, the rate formula and rate-change
+//!   configs, global accumulators (`TotalUtilized`, `CreditLineCount`,
+//!   `TreasuryBalance`), per-protocol caps, the oracle config and last
+//!   price, and the auction-contract pointer.
+//! - **Persistent storage** — keyed, per-borrower state with TTL. Holds the
+//!   `CreditLineData` itself (under `CreditLineIdByBorrower(Address)`), the
+//!   blocklist flag, utilization cap, rate floor, repayment schedule,
+//!   collateral balance, draw audit / reversal log, and the
+//!   `(borrower, settlement_id)` replay marker for default settlement.
+//!
+//! Every persistent read goes through helpers that call
+//! [`bump_credit_line_ttl`] (which extends the entry to
+//! `LEDGER_BUMP_AMOUNT ≈ 6 months` when the remaining TTL drops below
+//! `LEDGER_BUMP_THRESHOLD ≈ 3 months`). This means an active borrower's
+//! state is automatically refreshed on every interaction.
+//!
+//! # Why
+//!
+//! Centralizing every storage access here lets the contract enforce three
+//! invariants in one place:
+//!
+//! 1. **TTL hygiene** — no caller forgets to bump.
+//! 2. **TotalUtilized conservation** — [`persist_credit_line`] is the only
+//!    write path for `CreditLineData` and atomically adjusts the global
+//!    `TotalUtilized` accumulator using the caller-captured
+//!    `previous_utilized`. `Overflow = 12` reverts if the delta over- or
+//!    under-flows.
+//! 3. **Monotonic timestamps** — [`assert_ts_monotonic`] is the single
+//!    chokepoint that callers use to enforce `last_accrual_ts`,
+//!    `last_rate_update_ts`, and `suspension_ts` are non-decreasing.
+//!
+//! # Reentrancy & pause primitives
+//!
+//! The instance `Symbol("reentrancy")` slot is set by
+//! [`set_reentrancy_guard`] (which reverts `Reentrancy = 11` if already
+//! set) and cleared by [`clear_reentrancy_guard`]. The instance
+//! `Symbol("paused")` slot is consulted via [`assert_not_paused`] which
+//! reverts `Paused = 18` when the protocol is paused.
+//!
+//! See [`docs/storage-layout.md`](../../../docs/storage-layout.md) for the
+//! tier reference and
+//! [`docs/PROTOCOL_SPEC.md`](../../../docs/PROTOCOL_SPEC.md) §3 for the
+//! full per-variant tier table.
+
 use crate::types::{ContractError, CreditLineData, RepaymentSchedule};
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
