@@ -1,3 +1,45 @@
+//! Auction contract type definitions.
+//!
+//! # What
+//!
+//! ABI types shared between the auction `#[contractimpl]` block and storage:
+//!
+//! - [`AuctionMode`] — English (ascending) or Dutch (descending) bid model.
+//! - [`AuctionStatus`] — Open → Closed → Claimed terminal lifecycle.
+//! - [`AuctionConfig`] — immutable per-auction parameters set at init.
+//! - [`AuctionState`] — mutable bid state (highest bidder & bid amount).
+//! - [`Bid`] — single-bid record (currently informational, not persisted
+//!   per-bid).
+//! - [`DataKey`] — instance-storage keys used by the auction contract.
+//! - [`AuctionKey`] — id-scoped persistent keys for the alternate storage
+//!   API exposed by [`crate::storage`].
+//!
+//! # How
+//!
+//! All types are `#[contracttype]`-tagged so they cross the Soroban host ABI
+//! boundary as structured values. Discriminants are ABI-stable; new variants
+//! must be appended (see `gateway-contract/contracts/auction_contract/src/errors.rs`
+//! for the same discipline applied to [`crate::errors::AuctionError`]).
+//!
+//! # Why
+//!
+//! The English mode is the protocol's default for asset disposal: bidders
+//! atomically refund the previous highest bidder under the reentrancy guard
+//! when outbid. The Dutch mode is included so the credit contract's default-
+//! liquidation handoff can settle on a known-bounded timeline — first
+//! qualifying bid wins and closes the auction in the same transaction.
+//!
+//! # Storage tier
+//!
+//! The instance `DataKey` variants store the *current* auction's
+//! configuration and state in instance storage (small, hot). The persistent
+//! [`AuctionKey`] variants — `Seller(id)`, `Asset(id)`, etc. — encode an
+//! id-scoped namespace used by the alternate API in [`crate::storage`] when
+//! the contract serves multiple auctions concurrently.
+//!
+//! See [`docs/default-liquidation-auction-hook.md`](../../../../docs/default-liquidation-auction-hook.md)
+//! for the cross-contract settlement protocol.
+
 use soroban_sdk::{contracttype, Address, BytesN};
 
 #[contracttype]
