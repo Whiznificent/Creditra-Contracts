@@ -47,7 +47,7 @@
 
 use crate::storage::{
     get_collateral_balance, set_collateral_balance, get_min_collateral_ratio_bps,
-    get_credit_line, get_collateral_token,
+    get_credit_line, get_collateral_token, add_borrower_collateral_token,
 };
 use crate::events::{
     publish_collateral_deposited_event, publish_collateral_withdrawn_event,
@@ -58,7 +58,7 @@ use soroban_sdk::{Address, Env, token};
 
 /// Deposit collateral tokens from the borrower into the contract.
 /// Requires borrower authentication.
-pub fn deposit_collateral(env: &Env, borrower: &Address, amount: i128) {
+pub fn deposit_collateral(env: &Env, borrower: &Address, token: &Address, amount: i128) {
     // Basic validation
     if amount <= 0 {
         env.panic_with_error(ContractError::InvalidAmount);
@@ -66,10 +66,7 @@ pub fn deposit_collateral(env: &Env, borrower: &Address, amount: i128) {
     borrower.require_auth();
 
     // Transfer token from borrower to contract address
-    let token_addr = get_collateral_token(env).unwrap_or_else(|| {
-        env.panic_with_error(ContractError::MissingLiquidityToken);
-    });
-    let token_client = token::Client::new(env, &token_addr);
+    let token_client = token::Client::new(env, token);
     let contract_addr = env.current_contract_address();
     
     // In Soroban token standard, transfer takes (from, to, amount).
@@ -77,15 +74,17 @@ pub fn deposit_collateral(env: &Env, borrower: &Address, amount: i128) {
     token_client.transfer(borrower, &contract_addr, &amount);
 
     // Update stored collateral balance (add amount)
-    let cur_balance = get_collateral_balance(env, borrower);
+    let cur_balance = get_collateral_balance(env, borrower, token);
     let new_balance = cur_balance.checked_add(amount).unwrap_or_else(|| {
         env.panic_with_error(ContractError::Overflow);
     });
-    set_collateral_balance(env, borrower, new_balance);
+    set_collateral_balance(env, borrower, token, new_balance);
+    add_borrower_collateral_token(env, borrower, token);
 
     // Publish event
     publish_collateral_deposited_event(env, CollateralDepositedEvent {
         borrower: borrower.clone(),
+        token: token.clone(),
         amount,
         new_balance,
     });
@@ -93,14 +92,14 @@ pub fn deposit_collateral(env: &Env, borrower: &Address, amount: i128) {
 
 /// Withdraw collateral tokens to the borrower.
 /// Requires borrower authentication and ensures collateral ratio remains above minimum.
-pub fn withdraw_collateral(env: &Env, borrower: &Address, amount: i128) {
+pub fn withdraw_collateral(env: &Env, borrower: &Address, token: &Address, amount: i128) {
     if amount <= 0 {
         env.panic_with_error(ContractError::InvalidAmount);
     }
     borrower.require_auth();
 
     // Get current collateral balance
-    let cur_balance = get_collateral_balance(env, borrower);
+    let cur_balance = get_collateral_balance(env, borrower, token);
     if amount > cur_balance {
         // We reuse `InsufficientRepaymentBalance` here to avoid expanding the
         // error enum for this niche case; the semantics ("the caller asked to
@@ -116,7 +115,7 @@ pub fn withdraw_collateral(env: &Env, borrower: &Address, amount: i128) {
     if let Some(credit_line) = get_credit_line(env, borrower) {
         if credit_line.utilized_amount > 0 {
             // Compute required collateral after withdrawal
-            let min_ratio_bps = get_min_collateral_ratio_bps(env).unwrap_or(15000);
+            let min_ratio_bps = get_min_collateral_ratio_bps(env, token).unwrap_or(15000);
             let required = (credit_line.utilized_amount as i128)
                 .checked_mul(min_ratio_bps as i128)
                 .unwrap_or_else(|| env.panic_with_error(ContractError::Overflow))
@@ -129,25 +128,23 @@ pub fn withdraw_collateral(env: &Env, borrower: &Address, amount: i128) {
     }
 
     // Transfer token from contract to borrower
-    let token_addr = get_collateral_token(env).unwrap_or_else(|| {
-        env.panic_with_error(ContractError::MissingLiquidityToken);
-    });
-    let token_client = token::Client::new(env, &token_addr);
+    let token_client = token::Client::new(env, token);
     let contract_addr = env.current_contract_address();
     token_client.transfer(&contract_addr, borrower, &amount);
 
     // Update stored collateral balance (subtract amount)
-    set_collateral_balance(env, borrower, post_balance);
+    set_collateral_balance(env, borrower, token, post_balance);
 
     // Publish event
     publish_collateral_withdrawn_event(env, CollateralWithdrawnEvent {
         borrower: borrower.clone(),
+        token: token.clone(),
         amount,
         new_balance: post_balance,
     });
 }
 
 /// Read‑only getter for a borrower's collateral balance.
-pub fn get_collateral(env: &Env, borrower: &Address) -> i128 {
-    get_collateral_balance(env, borrower)
+pub fn get_collateral(env: &Env, borrower: &Address, token: &Address) -> i128 {
+    get_collateral_balance(env, borrower, token)
 }

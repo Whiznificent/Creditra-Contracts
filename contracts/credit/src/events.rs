@@ -350,6 +350,7 @@ pub fn publish_penalty_rate_exited_event(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CollateralDepositedEvent {
     pub borrower: Address,
+    pub token: Address,
     pub amount: i128,
     pub new_balance: i128,
 }
@@ -358,6 +359,7 @@ pub struct CollateralDepositedEvent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CollateralWithdrawnEvent {
     pub borrower: Address,
+    pub token: Address,
     pub amount: i128,
     pub new_balance: i128,
 }

@@ -121,14 +121,14 @@ use crate::events::{
     InterestAccruedEvent, RepaymentEvent,
     publish_oracle_config_set_event, publish_oracle_price_accepted_event,
     publish_contract_upgraded_event, ContractUpgradedEvent,
+    publish_rate_formula_config_event, publish_draw_reversed_event, DrawReversedEvent,
 };
 use crate::math_utils::{mul_div, Rounding, compute_deviation_bps};
 use crate::storage::{
     admin_key, assert_not_paused, clear_reentrancy_guard, proposed_admin_key, proposed_at_key,
-    rate_cfg_key, set_reentrancy_guard, DataKey, persist_credit_line,
+    rate_cfg_key, rate_formula_key, set_reentrancy_guard, DataKey, persist_credit_line,
     get_borrower_by_credit_line_id, MAX_ENUMERATION_LIMIT,
     set_borrower_blocked as storage_set_borrower_blocked,
-    set_borrower_unblocked,
     is_borrower_blocked as storage_is_borrower_blocked,
     clear_repayment_schedule,
     get_credit_line as storage_get_credit_line,
@@ -136,10 +136,11 @@ use crate::storage::{
     set_last_draw_ts as storage_set_last_draw_ts,
     get_utilization_cap_bps as storage_get_utilization_cap_bps,
     set_utilization_cap_bps as storage_set_utilization_cap_bps,
+    get_oracle_config, set_oracle_config,
 };
 use crate::types::{
     ContractError, CreditLineData, CreditStatus, GracePeriodConfig, GraceWaiverMode,
-    OracleConfig, RateChangeConfig,
+    OracleConfig, RateChangeConfig, RateFormulaConfig, ProtocolConfig,
 };
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env, Symbol, Vec};
 
@@ -162,6 +163,9 @@ const BULK_BLOCK_MAX: u32 = 50;
 /// Maximum borrowers that can be processed in a single keeper accrual batch.
 /// Keeps the entrypoint within Soroban resource limits.
 const ACCRUE_BATCH_MAX: u32 = 50;
+
+/// Reversal window for draw operations.
+const DRAW_REVERSAL_WINDOW_SECS: u64 = 3600;
 
 #[soroban_sdk::contractclient(name = "AuctionClient")]
 pub trait Auction {
@@ -418,17 +422,24 @@ impl Credit {
         }
 
         // Enforce minimum collateral ratio
-        let min_ratio_bps = crate::storage::get_min_collateral_ratio_bps(&env).unwrap_or(15000);
-        let current_collateral = crate::storage::get_collateral_balance(&env, &borrower);
-        let required_collateral = (updated_utilized as i128)
-            .checked_mul(min_ratio_bps as i128)
-            .unwrap_or_else(|| {
-                clear_reentrancy_guard(&env);
-                env.panic_with_error(ContractError::Overflow)
-            })
-            / 10_000;
-
-        if current_collateral < required_collateral {
+        let tokens = crate::storage::get_borrower_collateral_tokens(&env, &borrower);
+        let mut satisfied = false;
+        for token in tokens.iter() {
+            let min_ratio_bps = crate::storage::get_min_collateral_ratio_bps(&env, &token).unwrap_or(15000);
+            let current_collateral = crate::storage::get_collateral_balance(&env, &borrower, &token);
+            let required_collateral = (updated_utilized as i128)
+                .checked_mul(min_ratio_bps as i128)
+                .unwrap_or_else(|| {
+                    clear_reentrancy_guard(&env);
+                    env.panic_with_error(ContractError::Overflow)
+                })
+                / 10_000;
+            if current_collateral >= required_collateral {
+                satisfied = true;
+                break;
+            }
+        }
+        if !satisfied {
             clear_reentrancy_guard(&env);
             env.panic_with_error(ContractError::CollateralRatioBelowMinimum);
         }
@@ -888,16 +899,36 @@ impl Credit {
         crate::storage::get_total_utilized(&env)
     }
 
-    pub fn deposit_collateral(env: Env, borrower: Address, amount: i128) {
-        crate::collateral::deposit_collateral(&env, &borrower, amount);
+    pub fn deposit_collateral(env: Env, borrower: Address, token: Address, amount: i128) {
+        crate::collateral::deposit_collateral(&env, &borrower, &token, amount);
     }
 
-    pub fn withdraw_collateral(env: Env, borrower: Address, amount: i128) {
-        crate::collateral::withdraw_collateral(&env, &borrower, amount);
+    pub fn withdraw_collateral(env: Env, borrower: Address, token: Address, amount: i128) {
+        crate::collateral::withdraw_collateral(&env, &borrower, &token, amount);
     }
 
-    pub fn get_collateral(env: Env, borrower: Address) -> i128 {
-        crate::collateral::get_collateral(&env, &borrower)
+    pub fn get_collateral(env: Env, borrower: Address, token: Address) -> i128 {
+        crate::collateral::get_collateral(&env, &borrower, &token)
+    }
+
+    /// Retrieve all collateral balances for a borrower.
+    pub fn get_collateral_ledger(env: Env, borrower: Address) -> soroban_sdk::Vec<crate::types::CollateralLedger> {
+        let tokens = crate::storage::get_borrower_collateral_tokens(&env, &borrower);
+        let mut ledger = soroban_sdk::Vec::new(&env);
+        for token in tokens.iter() {
+            let balance = crate::storage::get_collateral_balance(&env, &borrower, &token);
+            ledger.push_back(crate::types::CollateralLedger {
+                token: token.clone(),
+                balance,
+            });
+        }
+        ledger
+    }
+
+    /// Set minimum collateral ratio in basis points for a specific token (admin only).
+    pub fn set_min_collateral_ratio_bps(env: Env, token: Address, ratio_bps: u32) {
+        require_admin_auth(&env);
+        crate::storage::set_min_collateral_ratio_bps(&env, &token, ratio_bps);
     }
 
     /// Set the maximum total utilization allowed across all credit lines (admin only).
@@ -1017,11 +1048,7 @@ impl Credit {
         lifecycle::default_credit_line(env, borrower)
     }
 
-    pub fn reinstate_credit_line(env: Env, borrower: Address) {
-        lifecycle::reinstate_credit_line(env, borrower)
-    }
 
-// duplicate wrapper removed
 
     pub fn reinstate_credit_line(env: Env, borrower: Address, target_status: CreditStatus) {
         lifecycle::reinstate_credit_line(env, borrower, target_status)
@@ -1167,7 +1194,7 @@ impl Credit {
     pub fn block_borrower(env: Env, admin: Address, borrower: Address) {
         admin.require_auth();
         require_admin_auth(&env);
-        storage_set_borrower_blocked(&env, &borrower);
+        storage_set_borrower_blocked(&env, &borrower, true);
         publish_borrower_blocked_event(&env, &borrower, true);
     }
 
@@ -1178,7 +1205,7 @@ impl Credit {
     pub fn unblock_borrower(env: Env, admin: Address, borrower: Address) {
         admin.require_auth();
         require_admin_auth(&env);
-        set_borrower_unblocked(&env, &borrower);
+        storage_set_borrower_blocked(&env, &borrower, false);
         publish_borrower_blocked_event(&env, &borrower, false);
     }
 
@@ -1205,7 +1232,7 @@ impl Credit {
             );
         }
         for borrower in borrowers.iter() {
-            storage_set_borrower_blocked(&env, &borrower);
+            storage_set_borrower_blocked(&env, &borrower, true);
             publish_borrower_blocked_event(&env, &borrower, true);
         }
     }
@@ -1421,7 +1448,7 @@ impl Credit {
         require_admin_auth(&env);
 
         // Retrieve the current WASM hash before upgrade for event emission.
-        let old_wasm_hash = env.deployer().get_current_contract_wasm();
+        let old_wasm_hash = env.current_contract_wasm_hash();
 
         // Bump schema version to track upgrade history.
         let current_version = crate::storage::get_schema_version(&env).unwrap_or(SCHEMA_VERSION);

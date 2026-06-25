@@ -293,3 +293,15 @@ pub fn apply_accrual(env: &Env, mut line: CreditLineData) -> CreditLineData {
 
     line
 }
+
+/// Accrue interest in batch for multiple borrowers.
+pub fn accrue_batch(env: &Env, borrowers: soroban_sdk::Vec<Address>) {
+    for borrower in borrowers.iter() {
+        if let Some(line) = crate::storage::get_credit_line(env, &borrower) {
+            if line.status == CreditStatus::Active || line.status == CreditStatus::Suspended {
+                let updated = apply_accrual(env, line);
+                crate::storage::persist_credit_line(env, &updated);
+            }
+        }
+    }
+}

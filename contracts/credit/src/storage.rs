@@ -59,7 +59,7 @@
 //! full per-variant tier table.
 
 use crate::types::{ContractError, CreditLineData, RepaymentSchedule};
-use soroban_sdk::{contracttype, Address, Env, Symbol};
+use soroban_sdk::{contracttype, Address, Env, Symbol, TryIntoVal};
 
 /// Storage keys used in instance and persistent storage.
 ///
@@ -141,6 +141,10 @@ pub enum DataKey {
     TreasuryBalance,
     /// Per-borrower collateral balance.
     CollateralBalance(Address),
+    /// Per-borrower, per-token collateral balance.
+    CollateralBalanceByToken(Address, Address),
+    /// Per-borrower list of deposited collateral tokens.
+    BorrowerCollateralTokens(Address),
     /// Minimum collateral ratio in basis points.
     MinCollateralRatioBps,
     /// Per-borrower draw audit trail: (borrower, timestamp) → original draw amount.
@@ -419,10 +423,16 @@ pub fn get_borrower_rate_floor(env: &Env, borrower: &Address) -> Option<u32> {
 }
 
 /// Set a per-borrower max utilization ratio cap in basis points (admin only).
-pub fn set_utilization_cap_bps(env: &Env, borrower: &Address, cap_bps: u32) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::UtilizationCapBps(borrower.clone()), &cap_bps);
+pub fn set_utilization_cap_bps(env: &Env, borrower: &Address, cap_bps: Option<u32>) {
+    if let Some(cap) = cap_bps {
+        env.storage()
+            .persistent()
+            .set(&DataKey::UtilizationCapBps(borrower.clone()), &cap);
+    } else {
+        env.storage()
+            .persistent()
+            .remove(&DataKey::UtilizationCapBps(borrower.clone()));
+    }
 }
 
 /// Get the per-borrower max utilization ratio cap, if set.
@@ -676,4 +686,173 @@ pub fn get_penalty_surcharge_bps(env: &Env) -> u32 {
 /// - **Key**: [`DataKey::PenaltySurchargeBps`]
 pub fn set_penalty_surcharge_bps(env: &Env, bps: u32) {
     env.storage().instance().set(&DataKey::PenaltySurchargeBps, &bps);
+}
+
+// ── Collateral balance & ratio storage ────────────────────────────────────────
+
+/// Get the globally configured legacy collateral/liquidity token.
+pub fn get_collateral_token(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::LiquidityToken)
+}
+
+/// Get the per-borrower, per-token collateral balance.
+/// Backward-compatible fallback: if new key is missing and token is the legacy
+/// token, read from the legacy `CollateralBalance(Address)`.
+pub fn get_collateral_balance(env: &Env, borrower: &Address, token: &Address) -> i128 {
+    let key_new = DataKey::CollateralBalanceByToken(borrower.clone(), token.clone());
+    if env.storage().persistent().has(&key_new) {
+        bump_persistent_ttl(env, &key_new);
+        env.storage().persistent().get(&key_new).unwrap_or(0)
+    } else if let Some(legacy_token) = get_collateral_token(env) {
+        if &legacy_token == token {
+            let key_legacy = DataKey::CollateralBalance(borrower.clone());
+            if env.storage().persistent().has(&key_legacy) {
+                bump_persistent_ttl(env, &key_legacy);
+                env.storage().persistent().get(&key_legacy).unwrap_or(0)
+            } else {
+                0
+            }
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+/// Set the per-borrower, per-token collateral balance.
+/// Cleans up the legacy `CollateralBalance(Address)` key if it matches the legacy token
+/// to avoid double counting or stale reads.
+pub fn set_collateral_balance(env: &Env, borrower: &Address, token: &Address, amount: i128) {
+    let key_new = DataKey::CollateralBalanceByToken(borrower.clone(), token.clone());
+    env.storage().persistent().set(&key_new, &amount);
+    bump_persistent_ttl(env, &key_new);
+
+    // Clean up legacy key if it existed to avoid double counting/stale reads
+    if let Some(legacy_token) = get_collateral_token(env) {
+        if &legacy_token == token {
+            let key_legacy = DataKey::CollateralBalance(borrower.clone());
+            if env.storage().persistent().has(&key_legacy) {
+                env.storage().persistent().remove(&key_legacy);
+            }
+        }
+    }
+}
+
+/// Get the minimum collateral ratio in basis points for a token.
+/// Backward-compatible fallback: if per-token map is missing, check if token is
+/// the legacy token, and if so, return the legacy ratio.
+pub fn get_min_collateral_ratio_bps(env: &Env, token: &Address) -> Option<u32> {
+    let key = DataKey::MinCollateralRatioBps;
+    if let Some(val) = env.storage().instance().get::<_, soroban_sdk::Val>(&key) {
+        if let Ok(map) = val.try_into_val(env) as Result<soroban_sdk::Map<Address, u32>, _> {
+            map.get(token.clone())
+        } else if let Ok(legacy_ratio) = val.try_into_val(env) as Result<u32, _> {
+            if let Some(legacy_token) = get_collateral_token(env) {
+                if &legacy_token == token {
+                    Some(legacy_ratio)
+                } else {
+                    None
+                }
+            } else {
+                Some(legacy_ratio)
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+/// Set the minimum collateral ratio in basis points for a token.
+/// Inserts or updates the ratio in the per-token map under the `MinCollateralRatioBps` key.
+pub fn set_min_collateral_ratio_bps(env: &Env, token: &Address, ratio_bps: u32) {
+    assert!(ratio_bps <= 10_000, "ratio_bps must be <= 10000");
+    let key = DataKey::MinCollateralRatioBps;
+    let mut map: soroban_sdk::Map<Address, u32> = if let Some(val) = env.storage().instance().get::<_, soroban_sdk::Val>(&key) {
+        if let Ok(existing_map) = val.try_into_val(env) as Result<soroban_sdk::Map<Address, u32>, _> {
+            existing_map
+        } else {
+            soroban_sdk::Map::new(env)
+        }
+    } else {
+        soroban_sdk::Map::new(env)
+    };
+    map.set(token.clone(), ratio_bps);
+    env.storage().instance().set(&key, &map);
+}
+
+/// Get the list of all collateral tokens deposited by a borrower.
+/// Fallback: includes the legacy collateral token if they have a legacy balance.
+pub fn get_borrower_collateral_tokens(env: &Env, borrower: &Address) -> soroban_sdk::Vec<Address> {
+    let key = DataKey::BorrowerCollateralTokens(borrower.clone());
+    if env.storage().persistent().has(&key) {
+        bump_persistent_ttl(env, &key);
+        env.storage().persistent().get(&key).unwrap_or_else(|| soroban_sdk::Vec::new(env))
+    } else {
+        let mut v = soroban_sdk::Vec::new(env);
+        if let Some(legacy_token) = get_collateral_token(env) {
+            let legacy_key = DataKey::CollateralBalance(borrower.clone());
+            if env.storage().persistent().has(&legacy_key) {
+                v.push_back(legacy_token);
+            }
+        }
+        v
+    }
+}
+
+/// Add a token to the borrower's list of deposited collateral tokens.
+pub fn add_borrower_collateral_token(env: &Env, borrower: &Address, token: &Address) {
+    let mut tokens = get_borrower_collateral_tokens(env, borrower);
+    if !tokens.contains(token.clone()) {
+        tokens.push_back(token.clone());
+        let key = DataKey::BorrowerCollateralTokens(borrower.clone());
+        env.storage().persistent().set(&key, &tokens);
+        bump_persistent_ttl(env, &key);
+    }
+}
+
+// ── Treasury storage ─────────────────────────────────────────────────────────
+
+/// Get the configured treasury address.
+pub fn get_treasury_address(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::TreasuryAddress)
+}
+
+/// Set the treasury address.
+pub fn set_treasury_address(env: &Env, addr: &Address) {
+    env.storage().instance().set(&DataKey::TreasuryAddress, addr);
+}
+
+/// Get the accumulated treasury balance.
+pub fn get_treasury_balance(env: &Env) -> i128 {
+    env.storage().instance().get(&DataKey::TreasuryBalance).unwrap_or(0)
+}
+
+/// Add an amount to the accumulated treasury balance.
+pub fn add_treasury_balance(env: &Env, amount: i128) {
+    let current = get_treasury_balance(env);
+    let new_balance = current.checked_add(amount).unwrap_or_else(|| {
+        env.panic_with_error(crate::types::ContractError::Overflow);
+    });
+    env.storage().instance().set(&DataKey::TreasuryBalance, &new_balance);
+}
+
+/// Reset the accumulated treasury balance to zero.
+pub fn clear_treasury_balance(env: &Env) {
+    env.storage().instance().set(&DataKey::TreasuryBalance, &0_i128);
+}
+
+// ── Protocol fee storage ─────────────────────────────────────────────────────
+
+/// Get the protocol fee in basis points.
+pub fn get_protocol_fee_bps(env: &Env) -> Option<u32> {
+    env.storage().instance().get(&DataKey::ProtocolFeeBps)
+}
+
+/// Set the protocol fee in basis points.
+pub fn set_protocol_fee_bps(env: &Env, bps: u32) {
+    assert!(bps <= 1000, "protocol fee BPS exceeds maximum allowed");
+    env.storage().instance().set(&DataKey::ProtocolFeeBps, &bps);
 }
