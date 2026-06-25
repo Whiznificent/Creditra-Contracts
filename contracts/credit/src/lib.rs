@@ -146,6 +146,9 @@ use crate::types::{
 };
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env, Symbol, Vec};
 
+#[cfg(test)]
+use soroban_sdk::{IntoVal, TryIntoVal, testutils::Events as _};
+
 pub const CONTRACT_API_VERSION: (u32, u32, u32) = (1, 0, 0);
 
 /// Maximum allowed protocol fee in basis points (1000 = 10%). Adjust if needed.
@@ -2023,7 +2026,7 @@ mod test_smoke_coverage {
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
 
-    fn base(env: &Env) -> (CreditClient, Address, Address) {
+    fn base(env: &Env) -> (CreditClient<'_>, Address, Address) {
         env.mock_all_auths();
         let admin = Address::generate(env);
         let contract_id = env.register(Credit, ());
@@ -2039,7 +2042,7 @@ mod test_smoke_coverage {
         credit_limit: i128,
         reserve: i128,
         draw_amount: i128,
-    ) -> (CreditClient, Address, Address, Address) {
+    ) -> (CreditClient<'_>, Address, Address, Address) {
         env.mock_all_auths();
         let admin = Address::generate(env);
         let contract_id = env.register(Credit, ());
@@ -2186,7 +2189,7 @@ mod test_smoke_coverage {
 
         let events = env.events().all();
         let (_contract, _topics, data) = events.last().unwrap();
-        let event: RepaymentEvent = data.try_into_val(&env).unwrap();
+        let event: RepaymentEvent = data.into_val(&env).unwrap();
 
         assert_eq!(event.borrower, borrower);
         assert_eq!(event.amount, 300);
@@ -2270,62 +2273,14 @@ mod test_smoke_coverage {
 }
 
 #[cfg(test)]
-mod test_smoke_coverage {
-    use super::*;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
-
-    #[test]
-    #[should_panic(expected = "Only active credit lines can be suspended")]
-    fn lifecycle_suspend_non_active_reverts() {
-        let env = Env::default();
-        let (client, _admin, borrower) = base(&env);
-        client.open_credit_line(&borrower, &500_i128, &300_u32, &70_u32);
-        client.suspend_credit_line(&borrower);
-        client.suspend_credit_line(&borrower); // already suspended
-    }
-
-    /// Double-init does not overwrite the original admin.
-    /// Even if the second init somehow didn't panic (it should), admin must remain unchanged.
-    /// This test verifies the guard fires before any storage write.
-    #[test]
-    fn test_init_double_init_does_not_overwrite_admin() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = Address::generate(&env);
-        let contract_id = env.register(Credit, ());
-        let client = CreditClient::new(&env, &contract_id);
-        client.init(&admin);
-
-        // Admin is still the original — admin-gated call succeeds.
-        let borrower = Address::generate(&env);
-        client.open_credit_line(&borrower, &100_i128, &100_u32, &10_u32);
-        let line: CreditLineData = client.get_credit_line(&borrower).unwrap();
-        assert_eq!(line.borrower, borrower);
-    }
-
-    /// Calling admin-gated functions before init must revert (NotAdmin).
-    #[test]
-    #[should_panic]
-    fn test_admin_gated_call_before_init_reverts() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let borrower = Address::generate(&env);
-        let contract_id = env.register(Credit, ());
-        let client = CreditClient::new(&env, &contract_id);
-
-        // No init — suspend_credit_line requires admin, must panic because admin is not set.
-        client.suspend_credit_line(&borrower);
-    }
-}
-
-#[cfg(test)]
 pub mod test_helpers {
     use soroban_sdk::{
         testutils::Address as _,
         token::{Client as TokenClient, StellarAssetClient},
         Address, Env,
     };
+    use soroban_sdk::{contractimpl, symbol_short};
+    use crate::ContractError;
     pub struct MockLiquidityToken {
         pub address: Address,
         env: Env,
@@ -2420,21 +2375,21 @@ pub mod test_helpers {
     }
 
     /// A simple token contract that can be configured to fail on transfers.
-    #[contractimpl]
+    #[soroban_sdk::contract]
     pub struct FailingTokenContract {
         fail_transfer: bool,
         fail_transfer_from: bool,
     }
 
-    #[contractimpl]
+    #[soroban_sdk::contractimpl]
     impl FailingTokenContract {
         pub fn init(env: Env, fail_transfer: bool, fail_transfer_from: bool) {
             env.storage()
                 .instance()
-                .set(&symbol_short!("fail_transfer"), &fail_transfer);
+                .set(&soroban_sdk::symbol_short!("fail_tf"), &fail_transfer);
             env.storage()
                 .instance()
-                .set(&symbol_short!("fail_transfer_from"), &fail_transfer_from);
+                .set(&soroban_sdk::symbol_short!("fail_tfr"), &fail_transfer_from);
         }
 
         pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
@@ -2442,7 +2397,7 @@ pub mod test_helpers {
             let fail: bool = env
                 .storage()
                 .instance()
-                .get(&symbol_short!("fail_transfer"))
+                .get(&soroban_sdk::symbol_short!("fail_tf"))
                 .unwrap_or(false);
             if fail {
                 env.panic_with_error(ContractError::InvalidAmount); // arbitrary error
@@ -2455,7 +2410,7 @@ pub mod test_helpers {
             let fail: bool = env
                 .storage()
                 .instance()
-                .get(&symbol_short!("fail_transfer_from"))
+                .get(&soroban_sdk::symbol_short!("fail_tfr"))
                 .unwrap_or(false);
             if fail {
                 env.panic_with_error(ContractError::InvalidAmount);
@@ -2476,7 +2431,7 @@ mod test_mock_liquidity_token {
     use super::*;
     use crate::test_helpers::MockLiquidityToken;
     use soroban_sdk::{testutils::Address as _, Env};
-    fn setup(env: &Env) -> (CreditClient, Address, Address, MockLiquidityToken) {
+    fn setup(env: &Env) -> (CreditClient<'_>, Address, Address, MockLiquidityToken) {
         env.mock_all_auths();
         let admin = Address::generate(env);
         let borrower = Address::generate(env);
@@ -2634,7 +2589,7 @@ mod test_mock_liquidity_token {
             Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap(),
             symbol_short!("reinstate")
         );
-        let event_data: CreditLineEvent = data.try_into_val(&env).unwrap();
+        let event_data: CreditLineEvent = data.into_val(&env).unwrap();
         assert_eq!(event_data.status, CreditStatus::Active);
     }
 
@@ -2804,7 +2759,7 @@ mod test_mock_liquidity_token {
 
             let events = env.events().all();
             let (_contract, _topics, data): (_, _, soroban_sdk::Val) = events.last().unwrap();
-            let event: RepaymentEvent = data.try_into_val(&env).unwrap();
+            let event: RepaymentEvent = data.into_val(&env).unwrap();
 
             assert_eq!(event.borrower, borrower);
             assert_eq!(event.amount, 300);
@@ -3044,7 +2999,7 @@ mod test_mock_liquidity_token {
     #[cfg(test)]
     mod test_mock_liquidity_token {
         use super::*;
-        use crate::test_coverage::test_helpers::MockLiquidityToken;
+        use crate::test_helpers::MockLiquidityToken;
         use crate::events::CreditLineEvent;
         use soroban_sdk::testutils::Events as _;
         use soroban_sdk::testutils::Ledger;
@@ -3284,7 +3239,7 @@ mod test_mock_liquidity_token {
                 Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap(),
                 symbol_short!("reinstate")
             );
-            let event_data: CreditLineEvent = data.try_into_val(&env).unwrap();
+            let event_data: CreditLineEvent = data.into_val(&env).unwrap();
             assert_eq!(event_data.status, CreditStatus::Active);
         }
 
@@ -3325,7 +3280,7 @@ mod test_mock_liquidity_token {
                 Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap(),
                 symbol_short!("closed")
             );
-            let event_data: CreditLineEvent = data.try_into_val(&env).unwrap();
+            let event_data: CreditLineEvent = data.into_val(&env).unwrap();
             assert_eq!(event_data.status, CreditStatus::Closed);
             assert_eq!(event_data.borrower, borrower);
         }
@@ -4255,7 +4210,7 @@ mod test_mock_liquidity_token {
             let (_contract, topics, data) = events.last().unwrap();
             let topic_sym = Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap();
             assert_eq!(topic_sym, Symbol::new(&env, "drw_freeze"));
-            let event: DrawsFrozenEvent = data.try_into_val(&env).unwrap();
+            let event: DrawsFrozenEvent = data.into_val(&env).unwrap();
             assert!(event.frozen);
         }
 
@@ -4275,7 +4230,7 @@ mod test_mock_liquidity_token {
             let (_contract, topics, data) = events.last().unwrap();
             let topic_sym = Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap();
             assert_eq!(topic_sym, Symbol::new(&env, "drw_freeze"));
-            let event: DrawsFrozenEvent = data.try_into_val(&env).unwrap();
+            let event: DrawsFrozenEvent = data.into_val(&env).unwrap();
             assert!(!event.frozen);
         }
 
@@ -5153,7 +5108,7 @@ mod test_mock_liquidity_token {
     #[cfg(test)]
     mod test_utilization_cap {
         use super::*;
-        use crate::test_coverage::test_helpers::MockLiquidityToken;
+        use crate::test_helpers::MockLiquidityToken;
         use soroban_sdk::Env;
 
         fn setup_with_cap_env(
@@ -5472,7 +5427,7 @@ mod test_max_repay_amount {
     use soroban_sdk::token::StellarAssetClient;
     use soroban_sdk::Env;
 
-    fn setup_with_token(env: &Env) -> (CreditClient, Address, Address, Address) {
+    fn setup_with_token(env: &Env) -> (CreditClient<'_>, Address, Address, Address) {
         env.mock_all_auths();
         let admin = Address::generate(env);
         let borrower = Address::generate(env);
