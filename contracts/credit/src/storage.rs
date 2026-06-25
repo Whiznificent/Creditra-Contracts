@@ -15,8 +15,8 @@
 //!
 //! - **Instance storage** — small, hot, always loaded with the contract.
 //!   Holds admin/proposal/pause state, the rate formula and rate-change
-//!   configs, global accumulators (`TotalUtilized`, `CreditLineCount`,
-//!   `TreasuryBalance`), per-protocol caps, the oracle config and last
+//!   configs, global accumulators (`TotalUtilized`, `TotalCollateral`,
+//!   `CreditLineCount`, `TreasuryBalance`), per-protocol caps, the oracle config and last
 //!   price, and the auction-contract pointer.
 //! - **Persistent storage** — keyed, per-borrower state with TTL. Holds the
 //!   `CreditLineData` itself (under `CreditLineIdByBorrower(Address)`), the
@@ -73,6 +73,7 @@ use soroban_sdk::{contracttype, Address, Env, Symbol};
 ///   `DrawMinIntervalSeconds`, `MinCreditLimit`, `MaxCreditLimit`,
 ///   `PenaltySurchargeBps`, `AuctionContract`, `MaxTotalExposure`,
 ///   `ProtocolFeeBps`, `TreasuryAddress`, `TreasuryBalance`,
+///   `TotalCollateral`,
 ///   `MinCollateralRatioBps`, `OracleConfig`, `OracleLastPrice`,
 ///   `OracleLastPriceTs`).
 /// - **Persistent storage** for per-borrower / per-timestamp data
@@ -118,6 +119,9 @@ pub enum DataKey {
     /// Per-borrower interest rate floor in basis points.
     /// When set, the effective interest rate must be >= floor.
     RateFloorBps(Address),
+    /// Per-borrower interest rate ceiling in basis points.
+    /// When set, the effective interest rate must be <= ceiling.
+    RateCeilingBps(Address),
     /// Per-borrower installment schedule for delinquency tracking.
     RepaymentSchedule(Address),
     /// Minimum allowed credit limit for new credit lines (admin-configurable).
@@ -153,6 +157,8 @@ pub enum DataKey {
     OracleLastPrice,
     /// Timestamp of the last accepted oracle price.
     OracleLastPriceTs,
+    /// Global sum of every borrower's collateral balance.
+    TotalCollateral,
 }
 
 /// Maximum number of credit lines returned per page.
@@ -236,6 +242,14 @@ pub fn get_total_utilized(env: &Env) -> i128 {
         .unwrap_or(0)
 }
 
+/// Return the global collateral accumulator.
+pub fn get_total_collateral(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalCollateral)
+        .unwrap_or(0)
+}
+
 /// Return the number of indexed credit lines.
 pub fn get_credit_line_count(env: &Env) -> u32 {
     env.storage()
@@ -310,6 +324,23 @@ pub fn adjust_total_utilized(env: &Env, previous_utilized: i128, new_utilized: i
         .set(&DataKey::TotalUtilized, &updated_total);
 }
 
+/// Adjust the global collateral accumulator by the change in one borrower balance.
+pub fn adjust_total_collateral(env: &Env, previous_balance: i128, new_balance: i128) {
+    let delta = new_balance
+        .checked_sub(previous_balance)
+        .unwrap_or_else(|| env.panic_with_error(ContractError::Overflow));
+    if delta == 0 {
+        return;
+    }
+
+    let updated_total = get_total_collateral(env)
+        .checked_add(delta)
+        .unwrap_or_else(|| env.panic_with_error(ContractError::Overflow));
+    env.storage()
+        .instance()
+        .set(&DataKey::TotalCollateral, &updated_total);
+}
+
 /// Persist a credit line and atomically apply its contribution delta to the
 /// global total utilized accumulator.
 pub fn persist_credit_line(
@@ -322,6 +353,89 @@ pub fn persist_credit_line(
     env.storage().persistent().set(borrower, line);
     bump_credit_line_ttl(env, borrower);
     adjust_total_utilized(env, previous_utilized, line.utilized_amount);
+}
+
+/// Return a borrower's collateral balance without bumping unrelated TTL.
+pub fn get_collateral_balance(env: &Env, borrower: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::CollateralBalance(borrower.clone()))
+        .unwrap_or(0)
+}
+
+/// Persist a borrower collateral balance and update the global accumulator.
+pub fn set_collateral_balance(env: &Env, borrower: &Address, balance: i128) {
+    let previous_balance = get_collateral_balance(env, borrower);
+    env.storage()
+        .persistent()
+        .set(&DataKey::CollateralBalance(borrower.clone()), &balance);
+    adjust_total_collateral(env, previous_balance, balance);
+}
+
+/// Return the token used for collateral accounting.
+///
+/// The current contract uses the configured liquidity token for collateral
+/// transfers as well.
+pub fn get_collateral_token(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::LiquidityToken)
+}
+
+/// Return the minimum collateral ratio in basis points, if configured.
+pub fn get_min_collateral_ratio_bps(env: &Env) -> Option<u32> {
+    env.storage().instance().get(&DataKey::MinCollateralRatioBps)
+}
+
+/// Set the minimum collateral ratio in basis points.
+pub fn set_min_collateral_ratio_bps(env: &Env, ratio_bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MinCollateralRatioBps, &ratio_bps);
+}
+
+/// Return configured protocol fee basis points, if set.
+pub fn get_protocol_fee_bps(env: &Env) -> Option<u32> {
+    env.storage().instance().get(&DataKey::ProtocolFeeBps)
+}
+
+/// Persist protocol fee basis points.
+pub fn set_protocol_fee_bps(env: &Env, bps: u32) {
+    env.storage().instance().set(&DataKey::ProtocolFeeBps, &bps);
+}
+
+/// Return configured treasury address, if set.
+pub fn get_treasury_address(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::TreasuryAddress)
+}
+
+/// Persist configured treasury address.
+pub fn set_treasury_address(env: &Env, treasury: &Address) {
+    env.storage().instance().set(&DataKey::TreasuryAddress, treasury);
+}
+
+/// Return accumulated treasury balance.
+pub fn get_treasury_balance(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::TreasuryBalance)
+        .unwrap_or(0)
+}
+
+/// Add to accumulated treasury balance.
+pub fn add_treasury_balance(env: &Env, amount: i128) {
+    if amount == 0 {
+        return;
+    }
+    let updated_balance = get_treasury_balance(env)
+        .checked_add(amount)
+        .unwrap_or_else(|| env.panic_with_error(ContractError::Overflow));
+    env.storage()
+        .instance()
+        .set(&DataKey::TreasuryBalance, &updated_balance);
+}
+
+/// Clear accumulated treasury balance after withdrawal.
+pub fn clear_treasury_balance(env: &Env) {
+    env.storage().instance().set(&DataKey::TreasuryBalance, &0_i128);
 }
 
 pub fn admin_key(env: &Env) -> Symbol {
@@ -418,6 +532,29 @@ pub fn get_borrower_rate_floor(env: &Env, borrower: &Address) -> Option<u32> {
         .get(&DataKey::RateFloorBps(borrower.clone()))
 }
 
+/// Set a per-borrower interest rate ceiling (admin only, enforced by caller).
+pub fn set_borrower_rate_ceiling(env: &Env, borrower: &Address, ceiling_bps: Option<u32>) {
+    if let Some(ceiling) = ceiling_bps {
+        assert!(ceiling <= crate::risk::MAX_INTEREST_RATE_BPS, "ceiling exceeds max rate");
+    }
+    if let Some(ceiling) = ceiling_bps {
+        env.storage()
+            .persistent()
+            .set(&DataKey::RateCeilingBps(borrower.clone()), &ceiling);
+    } else {
+        env.storage()
+            .persistent()
+            .remove(&DataKey::RateCeilingBps(borrower.clone()));
+    }
+}
+
+/// Get the per-borrower interest rate ceiling, if set.
+pub fn get_borrower_rate_ceiling(env: &Env, borrower: &Address) -> Option<u32> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::RateCeilingBps(borrower.clone()))
+}
+
 /// Set a per-borrower max utilization ratio cap in basis points (admin only).
 pub fn set_utilization_cap_bps(env: &Env, borrower: &Address, cap_bps: u32) {
     env.storage()
@@ -489,6 +626,15 @@ pub fn set_max_credit_limit(env: &Env, max: i128) {
 /// accounting-only operation.
 pub fn get_auction_contract(env: &Env) -> Option<Address> {
     env.storage().instance().get(&DataKey::AuctionContract)
+}
+
+/// Return the configured collateral token, if any.
+///
+/// Historically the contract uses the single configured `LiquidityToken`
+/// for both liquidity and collateral operations; this helper abstracts the
+/// lookup so callers (e.g. `collateral.rs`) can use a dedicated name.
+pub fn get_collateral_token(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::LiquidityToken)
 }
 
 /// Persist the auction contract address (admin only, enforced by caller).

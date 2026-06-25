@@ -103,7 +103,7 @@ mod freeze;
 mod collateral;
 mod lifecycle;
 mod query;
-mod math_utils;
+pub mod math_utils;
 mod risk;
 mod storage;
 pub mod types;
@@ -121,6 +121,7 @@ use crate::events::{
     InterestAccruedEvent, RepaymentEvent,
     publish_oracle_config_set_event, publish_oracle_price_accepted_event,
     publish_contract_upgraded_event, ContractUpgradedEvent,
+    publish_token_rescued_event,
 };
 use crate::math_utils::{mul_div, Rounding, compute_deviation_bps};
 use crate::storage::{
@@ -139,7 +140,7 @@ use crate::storage::{
 };
 use crate::types::{
     ContractError, CreditLineData, CreditStatus, GracePeriodConfig, GraceWaiverMode,
-    OracleConfig, RateChangeConfig,
+    OracleConfig, ProtocolConfig, ProtocolSummary, RateChangeConfig, RateFormulaConfig,
 };
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env, Symbol, Vec};
 
@@ -162,6 +163,10 @@ const BULK_BLOCK_MAX: u32 = 50;
 /// Maximum borrowers that can be processed in a single keeper accrual batch.
 /// Keeps the entrypoint within Soroban resource limits.
 const ACCRUE_BATCH_MAX: u32 = 50;
+
+/// Maximum borrowers that can be closed in a single `close_credit_lines_batch` call.
+/// Prevents unbounded gas consumption and stays within ledger limits.
+const BATCH_CLOSE_MAX: u32 = 32;
 
 #[soroban_sdk::contractclient(name = "AuctionClient")]
 pub trait Auction {
@@ -262,6 +267,41 @@ impl Credit {
             .instance()
             .get(&DataKey::LiquiditySource)
             .unwrap_or_else(|| env.current_contract_address())
+    }
+
+    /// Admin-only: rescue tokens accidentally sent to this contract.
+    /// Cannot rescue the configured liquidity or collateral tokens.
+    pub fn rescue_token(env: Env, token: Address, recipient: Address, amount: i128) {
+        assert_not_paused(&env);
+        require_admin_auth(&env);
+
+        if amount <= 0 {
+            env.panic_with_error(ContractError::InvalidAmount);
+        }
+
+        // Disallow rescuing liquidity or collateral tokens
+        if let Some(liq) = env.storage().instance().get::<DataKey, Address>(&DataKey::LiquidityToken) {
+            if liq == token {
+                env.panic_with_error(ContractError::Unauthorized);
+            }
+        }
+
+        if let Some(col_token) = crate::storage::get_collateral_token(&env) {
+            if col_token == token {
+                env.panic_with_error(ContractError::Unauthorized);
+            }
+        }
+
+        // Transfer token from contract to recipient
+        let token_client = token::Client::new(&env, &token);
+        let contract_addr = env.current_contract_address();
+        token_client.transfer(&contract_addr, &recipient, &amount);
+
+        publish_token_rescued_event(&env, crate::events::TokenRescuedEvent {
+            token: token.clone(),
+            recipient: recipient.clone(),
+            amount,
+        });
     }
 
     pub fn open_credit_line(
@@ -670,6 +710,28 @@ impl Credit {
         storage::get_borrower_rate_floor(&env, &borrower)
     }
 
+    /// Set a per-borrower interest rate ceiling (admin only).
+    ///
+    /// When set, the effective interest rate for this borrower will not exceed
+    /// this value. Pass `None` to remove the ceiling.
+    ///
+    /// # Parameters
+    /// - `borrower`: The borrower whose ceiling to configure.
+    /// - `ceiling_bps`: Ceiling in basis points, or `None` to remove.
+    ///
+    /// # Errors
+    /// - Reverts if caller is not the contract admin.
+    /// - Reverts if `ceiling_bps` exceeds `MAX_INTEREST_RATE_BPS` (10_000).
+    /// - Reverts if `ceiling_bps` is less than the configured floor for this borrower.
+    pub fn set_borrower_rate_ceiling(env: Env, borrower: Address, ceiling_bps: Option<u32>) {
+        risk::set_borrower_rate_ceiling(env, borrower, ceiling_bps)
+    }
+
+    /// Get the interest rate ceiling for a borrower, if set.
+    pub fn get_borrower_rate_ceiling(env: Env, borrower: Address) -> Option<u32> {
+        storage::get_borrower_rate_ceiling(&env, &borrower)
+    }
+
     pub fn set_penalty_surcharge_bps(env: Env, bps: u32) {
         risk::set_penalty_surcharge_bps(env, bps)
     }
@@ -888,6 +950,14 @@ impl Credit {
         crate::storage::get_total_utilized(&env)
     }
 
+    /// Get protocol-level dashboard totals in one read-only call.
+    ///
+    /// Reads aggregate counters only: no borrower records are loaded and no TTL
+    /// entries are extended.
+    pub fn get_protocol_summary(env: Env) -> ProtocolSummary {
+        query::get_protocol_summary(env)
+    }
+
     pub fn deposit_collateral(env: Env, borrower: Address, amount: i128) {
         crate::collateral::deposit_collateral(&env, &borrower, amount);
     }
@@ -1011,6 +1081,18 @@ impl Credit {
 
     pub fn close_credit_line(env: Env, borrower: Address, closer: Address) {
         lifecycle::close_credit_line(env, borrower, closer)
+    }
+
+    /// Admin-only batch close of multiple credit lines.
+    /// Reverts on first failure, ensuring atomicity.
+    /// 
+    /// # Parameters
+    /// - `borrowers`: List of borrower addresses to close; max `BATCH_CLOSE_MAX`
+    pub fn close_credit_lines_batch(env: Env, borrowers: Vec<Address>) {
+        if borrowers.len() > BATCH_CLOSE_MAX {
+            env.panic_with_error(ContractError::InvalidAmount);
+        }
+        lifecycle::close_credit_lines_batch(env, borrowers)
     }
 
     pub fn default_credit_line(env: Env, borrower: Address) {
