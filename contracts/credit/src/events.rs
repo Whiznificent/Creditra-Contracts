@@ -383,6 +383,18 @@ pub fn publish_contract_upgraded_event(env: &Env, event: ContractUpgradedEvent) 
         .publish((symbol_short!("credit"), Symbol::new(env, "upgraded")), event);
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SchemaVersionEvent {
+    pub from: u32,
+    pub to: u32,
+}
+
+pub fn publish_schema_version_event(env: &Env, event: SchemaVersionEvent) {
+    env.events()
+        .publish((symbol_short!("credit"), Symbol::new(env, "schema_v")), event);
+}
+
 pub fn publish_oracle_config_set_event(env: &Env, max_deviation_bps: u32, max_age_seconds: u64) {
     env.events().publish(
         (symbol_short!("credit"), Symbol::new(env, "orc_cfg")),

@@ -9,7 +9,7 @@
 //! - Happy path: admin successfully upgrades contract WASM
 //! - Sad path: unauthorized caller is rejected
 //! - Event emission: upgrade event contains correct old/new WASM hashes
-//! - State preservation: schema version is bumped after upgrade
+//! - State preservation: schema version is preserved by WASM upgrade
 //! - Pause enforcement: upgrades are blocked when circuit breaker is active
 
 use soroban_sdk::testutils::{Address as _, Events, Ledger};
@@ -75,7 +75,7 @@ fn upgrade_happy_path_succeeds() {
 }
 
 #[test]
-fn upgrade_bumps_schema_version() {
+fn upgrade_preserves_schema_version() {
     let (env, _admin, contract_id, client) = setup();
 
     // Get initial schema version (should be 1 or None)
@@ -85,9 +85,9 @@ fn upgrade_bumps_schema_version() {
     let new_wasm_hash = mock_wasm_hash(&env, 42);
     client.upgrade(&new_wasm_hash);
 
-    // Verify schema version was bumped
+    // Verify schema version is preserved; storage migrations advance it.
     let updated_version = client.get_schema_version().unwrap();
-    assert_eq!(updated_version, initial_version + 1);
+    assert_eq!(updated_version, initial_version);
 }
 
 #[test]
@@ -238,14 +238,15 @@ fn upgrade_can_be_called_multiple_times() {
     client.upgrade(&wasm_hash_3);
     let version_3 = client.get_schema_version().unwrap();
 
-    // Verify schema version increments with each upgrade
-    assert_eq!(version_2, version_1 + 1);
-    assert_eq!(version_3, version_2 + 1);
+    // Verify storage schema version is not treated as an upgrade counter.
+    assert_eq!(version_2, version_1);
+    assert_eq!(version_3, version_2);
 }
 
 #[test]
 fn upgrade_with_same_wasm_hash_succeeds() {
     let (env, _admin, contract_id, client) = setup();
+    let initial_version = client.get_schema_version().unwrap();
 
     // Upgrade to a specific hash
     let wasm_hash = mock_wasm_hash(&env, 42);
@@ -254,9 +255,9 @@ fn upgrade_with_same_wasm_hash_succeeds() {
     // Upgrade again with the same hash (should succeed - idempotent)
     client.upgrade(&wasm_hash);
 
-    // Verify both upgrades succeeded by checking schema version
+    // Verify both upgrades succeeded without changing storage schema version.
     let version = client.get_schema_version().unwrap();
-    assert!(version >= 2); // At least 2 upgrades occurred
+    assert_eq!(version, initial_version);
 }
 
 #[test]
@@ -291,7 +292,7 @@ fn upgrade_does_not_affect_credit_line_operations() {
 // ── Coverage Edge Cases ───────────────────────────────────────────────────────
 
 #[test]
-fn upgrade_with_zero_schema_version_initializes_correctly() {
+fn upgrade_with_zero_schema_version_preserves_schema_marker() {
     let (env, _admin, contract_id, client) = setup();
 
     // Ensure schema version starts at a known state
@@ -302,9 +303,9 @@ fn upgrade_with_zero_schema_version_initializes_correctly() {
     let new_wasm_hash = mock_wasm_hash(&env, 42);
     client.upgrade(&new_wasm_hash);
 
-    // Verify schema version was incremented
+    // Verify schema version was preserved by the WASM upgrade.
     let after = client.get_schema_version().unwrap();
-    assert_eq!(after, initial + 1);
+    assert_eq!(after, initial);
 }
 
 #[test]

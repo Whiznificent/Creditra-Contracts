@@ -4,7 +4,9 @@
 
 The Creditra credit contract implements an admin-gated upgrade path using Soroban's
 native `env.deployer().update_current_contract_wasm()` mechanism. This allows the
-protocol to ship bug fixes and feature additions without migrating borrower state.
+protocol to ship bug fixes and feature additions while preserving borrower state.
+When a release changes storage semantics, the admin must also run the explicit
+`migrate_storage` hook after installing the new WASM.
 
 ## Upgrade Mechanism
 
@@ -17,7 +19,6 @@ The contract provides a public `upgrade` entrypoint that:
    - Pause check via `assert_not_paused()` — upgrades are blocked during circuit breaker activation
 
 2. **Updates state:**
-   - Bumps `SCHEMA_VERSION` in instance storage to track upgrade history
    - Retrieves the current WASM hash before upgrade for event emission
 
 3. **Performs atomic upgrade:**
@@ -61,7 +62,41 @@ soroban contract invoke \
   -- \
   upgrade \
   --new_wasm_hash <new_wasm_hash>
+
+# 4. If release notes say the storage schema changed, run migrations
+soroban contract invoke \
+  --id <contract-address> \
+  --source <admin-identity> \
+  --network <network> \
+  -- \
+  migrate_storage
 ```
+
+## Storage Migration Hook
+
+The contract provides an admin-only `migrate_storage` entrypoint. It reads
+`DataKey::SchemaVersion`, runs registered up-migrations keyed by the current
+version, and persists the compiled target `SCHEMA_VERSION` when all steps
+succeed.
+
+Migration policy:
+
+- `SchemaVersion` is the storage layout version, not an upgrade counter.
+- If storage is already at the compiled target version, `migrate_storage`
+  no-ops and emits no event.
+- Up-migration functions must be idempotent. Retrying a failed transaction must
+  not corrupt state or overwrite live values.
+- Steps run in ascending order from the stored version to the target version.
+- If storage reports a version newer than the deployed code, migration fails
+  closed. Deploy compatible WASM before attempting migrations.
+- A successful migration emits `SchemaVersionEvent { from, to }` on
+  `("credit", "schema_v")`.
+
+Current registered migration:
+
+| From | To | Effect |
+|------|----|--------|
+| 0 | 1 | Backfills missing v1 global counters `CreditLineCount = 0` and `TotalUtilized = 0` without overwriting existing values. |
 
 ## Rollback Process
 
@@ -151,7 +186,7 @@ After a successful upgrade:
      -- \
      get_schema_version
    ```
-   - Confirm version was incremented
+   - Confirm the version matches the release's documented target schema
 
 3. **Smoke test critical operations:**
    - Query existing credit lines: `get_credit_line`
@@ -195,7 +230,7 @@ The upgrade **does not** preserve:
 
 - Every upgrade emits a `ContractUpgradedEvent` with both WASM hashes
 - Off-chain indexers can track the full upgrade history
-- The `SCHEMA_VERSION` provides an on-chain monotonic upgrade counter
+- `SchemaVersionEvent` provides an on-chain audit trail for storage migrations
 
 ## Failure Modes
 
@@ -205,7 +240,7 @@ The upgrade **does not** preserve:
 | Malicious upgrade | Arbitrary code execution | Admin key protection + code review process |
 | Upgrade during pause | Upgrade reverts with `ContractError::Paused` | Unpause first, or wait for automatic unpause |
 | Rollback WASM unavailable | Cannot roll back to previous version | Archive all WASM binaries off-chain |
-| Schema version overflow | Version counter wraps (unlikely) | Monitor version and plan migration at high values |
+| Missing migration step | Storage cannot advance to the target schema | Add the missing from-version migration and redeploy compatible WASM |
 
 ## Testing
 
@@ -216,7 +251,7 @@ The upgrade functionality is covered by comprehensive integration tests in
 - ✅ Sad path: unauthorized caller rejected
 - ✅ Event emission: correct old/new WASM hashes
 - ✅ State preservation: credit lines survive upgrade
-- ✅ Schema version: incremented after upgrade
+- ✅ Schema version: preserved by upgrade and advanced only by `migrate_storage`
 - ✅ Pause enforcement: upgrades blocked when paused
 - ✅ Multiple upgrades: can be called repeatedly
 - ✅ Rollback: can revert to previous WASM
@@ -287,7 +322,7 @@ cargo llvm-cov --workspace --all-targets --fail-under-lines 95
 ### Post-Upgrade
 
 - [ ] Verify `ContractUpgradedEvent` emission
-- [ ] Check schema version increment
+- [ ] Check schema version and run `migrate_storage` when required by release notes
 - [ ] Smoke test critical operations
 - [ ] Monitor for anomalies
 - [ ] Update documentation with new version
@@ -298,5 +333,3 @@ cargo llvm-cov --workspace --all-targets --fail-under-lines 95
 - [Soroban Contract Deployment](https://developers.stellar.org/docs/smart-contracts/getting-started/deploy-to-testnet)
 - [Soroban Deployer Interface](https://docs.rs/soroban-sdk/latest/soroban_sdk/deploy/struct.Deployer.html)
 - [Contract Upgrade Best Practices](https://developers.stellar.org/docs/smart-contracts/guides/upgrading-contracts)
-
-

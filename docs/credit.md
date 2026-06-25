@@ -313,8 +313,15 @@ The credit contract stores an explicit schema marker under `DataKey::SchemaVersi
 
 - Current schema version: `1`
 - Existing key/value layouts are unchanged; the version key is additive metadata.
-- For immutable deployments, the version still gives off-chain tooling a deterministic way to detect schema expectations.
-- For future contract deployments, bump the schema version when storage semantics change and document migration requirements in release notes and deployment playbooks.
+- Admins run `migrate_storage` after a WASM upgrade when release notes state that
+  storage semantics changed.
+- `migrate_storage` no-ops when storage is already at the compiled target
+  version.
+- Successful migrations emit `SchemaVersionEvent { from, to }` on
+  `("credit", "schema_v")`.
+- For future contract deployments, bump the schema version only when storage
+  semantics change and document migration requirements in release notes and
+  deployment playbooks.
 
 - Normal behavior applies
 - If currently Restricted, increasing limit above `utilized_amount` reactivates to **Active**

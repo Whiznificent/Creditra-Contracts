@@ -41,7 +41,8 @@
 //! - **Operational controls** — pause/unpause, freeze/unfreeze, block/unblock
 //!   borrowers, `accrue_batch` keeper hook, `reverse_draw` time-windowed
 //!   reversal.
-//! - **Upgrade** — admin-gated atomic WASM swap with schema-version bump.
+//! - **Upgrade** — admin-gated atomic WASM swap plus explicit storage
+//!   migrations keyed by `SchemaVersion`.
 //!
 //! ## How
 //!
@@ -102,6 +103,7 @@ pub mod events;
 mod freeze;
 mod collateral;
 mod lifecycle;
+mod migrations;
 mod query;
 mod math_utils;
 mod risk;
@@ -883,6 +885,17 @@ impl Credit {
         crate::storage::get_schema_version(&env)
     }
 
+    /// Run registered storage up-migrations until storage reaches the compiled
+    /// schema target.
+    ///
+    /// # Authorization
+    /// Requires the configured admin. The migration runner is idempotent and
+    /// no-ops when storage is already at [`SCHEMA_VERSION`].
+    pub fn migrate_storage(env: Env) {
+        require_admin_auth(&env);
+        crate::migrations::migrate_storage(&env);
+    }
+
     /// Get the global total utilized accumulator.
     pub fn get_total_utilized(env: Env) -> i128 {
         crate::storage::get_total_utilized(&env)
@@ -1387,7 +1400,6 @@ impl Credit {
     /// - **Pause check**: Upgrades are blocked when the protocol circuit breaker is active.
     ///
     /// # State Updates
-    /// - Bumps `SCHEMA_VERSION` in instance storage to track upgrade history.
     /// - Calls `env.deployer().update_current_contract_wasm(new_wasm_hash)` to perform
     ///   the atomic WASM replacement.
     ///
@@ -1422,10 +1434,6 @@ impl Credit {
 
         // Retrieve the current WASM hash before upgrade for event emission.
         let old_wasm_hash = env.deployer().get_current_contract_wasm();
-
-        // Bump schema version to track upgrade history.
-        let current_version = crate::storage::get_schema_version(&env).unwrap_or(SCHEMA_VERSION);
-        crate::storage::set_schema_version(&env, current_version.saturating_add(1));
 
         // Perform the atomic WASM upgrade.
         env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
