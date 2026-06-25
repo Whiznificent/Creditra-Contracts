@@ -293,3 +293,36 @@ pub fn apply_accrual(env: &Env, mut line: CreditLineData) -> CreditLineData {
 
     line
 }
+
+/// Apply interest accrual to a bounded list of borrowers in a single keeper call.
+///
+/// Skips borrowers whose credit line does not exist or is not `Active`.
+/// Borrows with zero utilization are also skipped (no interest to accrue).
+/// Only non-zero accruals emit [`InterestAccruedEvent`].
+///
+/// No authentication required — this is a pure accounting update that is
+/// safe to call by any keeper.
+pub fn accrue_batch(env: &Env, borrowers: Vec<Address>) {
+    for borrower in borrowers.iter() {
+        // Load the credit line — skip if it doesn't exist.
+        let Some(line) = crate::storage::get_credit_line(env, &borrower) else {
+            continue;
+        };
+
+        // Only accrue on Active lines with positive utilization.
+        if line.status != crate::types::CreditStatus::Active {
+            continue;
+        }
+        if line.utilized_amount == 0 {
+            continue;
+        }
+
+        let previous_utilized = line.utilized_amount;
+        let updated = apply_accrual(env, line);
+
+        // Only write back if something actually changed.
+        if updated.utilized_amount != previous_utilized || updated.accrued_interest != 0 {
+            crate::storage::persist_credit_line(env, &borrower, &updated, previous_utilized);
+        }
+    }
+}

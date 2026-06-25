@@ -677,3 +677,102 @@ pub fn get_penalty_surcharge_bps(env: &Env) -> u32 {
 pub fn set_penalty_surcharge_bps(env: &Env, bps: u32) {
     env.storage().instance().set(&DataKey::PenaltySurchargeBps, &bps);
 }
+
+// ── Treasury ──────────────────────────────────────────────────────────────────
+
+/// Get the accumulated protocol fee balance held in the contract.
+pub fn get_treasury_balance(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::TreasuryBalance)
+        .unwrap_or(0)
+}
+
+/// Add `amount` to the treasury balance accumulator.
+pub fn add_treasury_balance(env: &Env, amount: i128) {
+    let current = get_treasury_balance(env);
+    let new_balance = current
+        .checked_add(amount)
+        .unwrap_or_else(|| env.panic_with_error(ContractError::Overflow));
+    env.storage()
+        .instance()
+        .set(&DataKey::TreasuryBalance, &new_balance);
+}
+
+/// Reset the treasury balance to zero (after withdrawal).
+pub fn clear_treasury_balance(env: &Env) {
+    env.storage()
+        .instance()
+        .set(&DataKey::TreasuryBalance, &0_i128);
+}
+
+/// Get the configured treasury address, if set.
+pub fn get_treasury_address(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::TreasuryAddress)
+}
+
+/// Persist the treasury address (admin only, enforced by caller).
+pub fn set_treasury_address(env: &Env, addr: &Address) {
+    env.storage()
+        .instance()
+        .set(&DataKey::TreasuryAddress, addr);
+}
+
+// ── Protocol fee ─────────────────────────────────────────────────────────────
+
+/// Get the configured protocol fee in basis points, if set.
+pub fn get_protocol_fee_bps(env: &Env) -> Option<u32> {
+    env.storage().instance().get(&DataKey::ProtocolFeeBps)
+}
+
+/// Set the protocol fee in basis points (admin only, enforced by caller).
+pub fn set_protocol_fee_bps(env: &Env, bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::ProtocolFeeBps, &bps);
+}
+
+// ── Collateral ────────────────────────────────────────────────────────────────
+
+/// Get the collateral balance for a borrower (0 if not set).
+pub fn get_collateral_balance(env: &Env, borrower: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::CollateralBalance(borrower.clone()))
+        .unwrap_or(0)
+}
+
+/// Set the collateral balance for a borrower.
+pub fn set_collateral_balance(env: &Env, borrower: &Address, balance: i128) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::CollateralBalance(borrower.clone()), &balance);
+}
+
+/// Get the configured minimum collateral ratio in basis points.
+/// Defaults to 15 000 bps (150 %) when not explicitly set.
+pub fn get_min_collateral_ratio_bps(env: &Env) -> Option<u32> {
+    env.storage()
+        .instance()
+        .get(&DataKey::MinCollateralRatioBps)
+}
+
+/// Set the minimum collateral ratio in basis points (admin only, enforced by caller).
+pub fn set_min_collateral_ratio_bps(env: &Env, ratio_bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MinCollateralRatioBps, &ratio_bps);
+}
+
+/// Get the collateral token address.
+///
+/// Collateral uses the same liquidity token as draws/repayments.
+/// Returns `None` if the liquidity token has not been configured yet.
+pub fn get_collateral_token(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::LiquidityToken)
+}
+
+/// Unblock a borrower (alias for `set_borrower_blocked(env, borrower, false)`).
+pub fn set_borrower_unblocked(env: &Env, borrower: &Address) {
+    set_borrower_blocked(env, borrower, false);
+}
