@@ -3,6 +3,10 @@
 Authoritative reference for which `DataKey` variants live in which Soroban
 storage tier. Source of truth: `contracts/credit/src/storage.rs`.
 
+> **Full TTL audit:** For the complete per-variant TTL bump matrix — including
+> bump function names, cadence, and touching entrypoints for all 30+ variants —
+> see [`docs/storage-tiers.md`](storage-tiers.md).
+
 ## Why this matters
 
 Soroban exposes three storage tiers — `temporary`, `instance`, and
