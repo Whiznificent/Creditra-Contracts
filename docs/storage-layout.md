@@ -63,6 +63,16 @@ draw) and whose individual TTLs need to be tracked.
 The `CreditLineData` struct itself is stored against the borrower address
 key directly (not via a `DataKey` variant) for backward compatibility.
 
+## Address strkey canonical encoding
+
+All per-borrower storage keys are derived directly or indirectly from an
+`Address` value. Soroban encodes an `Address` to its strkey representation
+(e.g. `G...` for accounts, `C...` for contracts) deterministically. The
+bidirectional round-trip `Address → strkey → Address` is pinned by
+`contracts/credit/tests/address_key_canonical.rs`, which synthesises known
+strkeys via `Address::from_string` / `Address::from_str` and asserts storage
+consistency under every `DataKey` variant.
+
 ## TTL bump strategy
 
 ```text
