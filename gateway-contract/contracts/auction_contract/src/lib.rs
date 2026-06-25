@@ -369,7 +369,8 @@ impl Auction {
         credit_contract: Address,
         borrower: Address,
     ) -> i128 {
-        let factory = get_factory_contract(&env).unwrap_or_else(|| panic!(AuctionError::NoFactoryContract));
+        let factory =
+            get_factory_contract(&env).unwrap_or_else(|| panic!(AuctionError::NoFactoryContract));
         if env.invoker() != factory {
             panic!(AuctionError::Unauthorized);
         }

@@ -86,8 +86,10 @@ fuzz_target!(|input: Input| {
     //   a) The monotonicity property is violated  → real bug
     //   b) Arithmetic overflowed with extreme i128 values  → documents a
     //      known limitation in the current implementation
-    let p1_result = std::panic::catch_unwind(|| compute_dutch_price(start_price, floor_price, t1, duration));
-    let p2_result = std::panic::catch_unwind(|| compute_dutch_price(start_price, floor_price, t2, duration));
+    let p1_result =
+        std::panic::catch_unwind(|| compute_dutch_price(start_price, floor_price, t1, duration));
+    let p2_result =
+        std::panic::catch_unwind(|| compute_dutch_price(start_price, floor_price, t2, duration));
 
     match (p1_result, p2_result) {
         (Ok(p1), Ok(p2)) => {
