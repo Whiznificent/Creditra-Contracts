@@ -458,4 +458,5 @@ impl Auction {
 extern crate std;
 
 #[cfg(test)]
-mod test;
+#[path = "test.rs"]
+mod testsuite;

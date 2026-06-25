@@ -1,8 +1,9 @@
 #[cfg(test)]
 mod tests {
     extern crate std;
-    use super::super::*;
     use crate::errors::AuctionError;
+    use crate::types::{AuctionMode, AuctionStatus};
+    use crate::{events, set_factory_contract, Auction, AuctionClient};
     use core::convert::TryFrom;
     use core::ops::Range;
     use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -10,8 +11,7 @@ mod tests {
 
     use soroban_sdk::testutils::Events as _;
     use soroban_sdk::testutils::Ledger as _;
-    use soroban_sdk::testutils::{Address as _, Ledger};
-    use soroban_sdk::testutils::{Ledger, MockAuth, MockAuthInvoke};
+    use soroban_sdk::testutils::{Address as _, MockAuth, MockAuthInvoke};
     use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
     use soroban_sdk::{Address, Env, IntoVal, Symbol, TryFromVal, TryIntoVal};
 
@@ -1354,6 +1354,9 @@ mod reentrancy_exploration {
     extern crate std;
     use super::*;
     use crate::errors::AuctionError;
+    use crate::storage::set_factory_contract;
+    use crate::types::{AuctionMode, AuctionStatus};
+    use crate::{events, Auction, AuctionClient};
     use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::{Address, Env, Symbol};
 
@@ -1572,6 +1575,9 @@ mod reentrancy_exploration {
 mod reentrancy_preservation {
     extern crate std;
     use super::*;
+    use crate::storage::set_factory_contract;
+    use crate::types::{AuctionMode, AuctionStatus};
+    use crate::{events, Auction, AuctionClient};
     use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
     use soroban_sdk::{Address, Env, Symbol, TryFromVal, TryIntoVal};
 

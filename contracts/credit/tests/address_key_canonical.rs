@@ -111,7 +111,8 @@ fn test_g_address_strkey_prefix() {
     let env = Env::default();
     let user = Address::generate(&env);
     let s = user.to_string();
-    let bytes = s.to_string().as_bytes();
+    let s_rust = s.to_string();
+    let bytes = s_rust.as_bytes();
     assert!(!bytes.is_empty(), "G-address strkey must not be empty");
     let first = bytes[0] as char;
     assert!(
@@ -126,7 +127,8 @@ fn test_c_address_strkey_prefix() {
     let env = Env::default();
     let contract_id = env.register(Credit, ());
     let s = contract_id.to_string();
-    let bytes = s.to_string().as_bytes();
+    let s_rust = s.to_string();
+    let bytes = s_rust.as_bytes();
     assert!(!bytes.is_empty());
     let first = bytes[0] as char;
     assert_eq!(first, 'C', "Contract address strkey must start with 'C'");
@@ -143,8 +145,8 @@ fn test_g_and_c_strkey_prefixes_are_distinct() {
 
     assert_ne!(user_str, contract_str);
 
-    let user_first = user_str.as_ref().as_bytes()[0] as char;
-    let contract_first = contract_str.as_ref().as_bytes()[0] as char;
+    let user_first = user_str.to_string().as_bytes()[0] as char;
+    let contract_first = contract_str.to_string().as_bytes()[0] as char;
     assert_eq!(user_first, 'G', "User address strkey should start with 'G'");
     assert_eq!(
         contract_first, 'C',
@@ -248,7 +250,7 @@ fn test_to_string_then_from_str_via_env() {
 
     // Path B: from_str (takes &str via Env)
     let str_rust = strkey_sdk.to_string();
-    let via_from_str = Address::from_str(&env, str_rust);
+    let via_from_str = Address::from_str(&env, &str_rust);
     assert_eq!(via_from_str, borrower);
 
     // Path C: idempotent — to_string on restored yields same string
