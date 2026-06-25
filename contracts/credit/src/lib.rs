@@ -163,6 +163,10 @@ const BULK_BLOCK_MAX: u32 = 50;
 /// Keeps the entrypoint within Soroban resource limits.
 const ACCRUE_BATCH_MAX: u32 = 50;
 
+/// Draw reversal time window in seconds.
+/// A draw can be reversed only within this window after the original draw.
+const DRAW_REVERSAL_WINDOW_SECS: u64 = 86_400; // 24 hours
+
 #[soroban_sdk::contractclient(name = "AuctionClient")]
 pub trait Auction {
     fn settle_default_liquidation(
@@ -1016,12 +1020,6 @@ impl Credit {
     pub fn default_credit_line(env: Env, borrower: Address) {
         lifecycle::default_credit_line(env, borrower)
     }
-
-    pub fn reinstate_credit_line(env: Env, borrower: Address) {
-        lifecycle::reinstate_credit_line(env, borrower)
-    }
-
-// duplicate wrapper removed
 
     pub fn reinstate_credit_line(env: Env, borrower: Address, target_status: CreditStatus) {
         lifecycle::reinstate_credit_line(env, borrower, target_status)

@@ -59,6 +59,7 @@ use crate::storage::persist_credit_line;
 use crate::types::{ContractError, CreditLineData, CreditStatus, GracePeriodConfig, GraceWaiverMode};
 use crate::math_utils::{prorate_interest, Rounding};
 use soroban_sdk::{Address, Env, Vec};
+use crate::storage::get_credit_line;
 
 /// Compute and apply accrued interest to a credit line for the elapsed period.
 ///
@@ -292,4 +293,25 @@ pub fn apply_accrual(env: &Env, mut line: CreditLineData) -> CreditLineData {
     }
 
     line
+}
+
+/// Apply accrual for a batch of borrowers.
+///
+/// Iterates over the provided borrower list and calls [`apply_accrual`] for
+/// each one that has an existing credit line. Missing lines and non-active
+/// lines are skipped without reverting. Each updated line is persisted to
+/// storage immediately.
+///
+/// This is a keeper-style entrypoint; no authentication is required.
+pub fn accrue_batch(env: &Env, borrowers: Vec<Address>) {
+    for i in 0..borrowers.len() {
+        let borrower = borrowers.get(i).unwrap();
+        let line = get_credit_line(env, &borrower);
+        if let Some(credit_line) = line {
+            if credit_line.status == CreditStatus::Active {
+                let updated = apply_accrual(env, credit_line);
+                persist_credit_line(env, &borrower, &updated);
+            }
+        }
+    }
 }
