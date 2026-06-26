@@ -135,3 +135,178 @@ calling the function without valid authorization panics (reverts).
 | `freeze_draws_non_admin_mock_auth` | `freeze_draws` (mock non-admin) |
 | `update_risk_parameters_non_admin_mock_auth` | `update_risk_parameters` (mock non-admin) |
 | `set_protocol_paused_non_admin_mock_auth` | `set_protocol_paused` (mock non-admin) |
+
+
+---
+
+## Soroban-Specific Reentrancy via `__check_auth` Callbacks
+
+### Background
+
+Traditional reentrancy exploits reenter a contract during an external token
+transfer (the classic EVM pattern). Soroban introduces a second, less obvious
+vector: the **`__check_auth` callback**.
+
+When a contract calls `address.require_auth()`, the Soroban host invokes
+`__check_auth` on the authorising account/contract. If the authorising
+address is itself a smart contract (a "custom account"), that contract's
+`__check_auth` implementation runs **inside the same transaction**, with the
+ability to invoke any other contract — including the one that just called
+`require_auth()`.
+
+This means an attacker can deploy a malicious custom-account contract whose
+`__check_auth` re-enters `place_bid` or `claim_auction` *before the outer
+call has finished mutating state*.
+
+---
+
+### Attack Scenario — `place_bid` via `__check_auth`
+
+**Pre-conditions**
+
+- Auction is open with one existing bid from honest bidder `H`.
+- Attacker controls a custom-account contract `M` whose `__check_auth`
+  re-enters the auction contract.
+
+**Step-by-step**
+
+```
+Attacker transaction
+│
+├─ 1. call place_bid(auction_id, amount=X)   ← outer call begins
+│       bidder = M (malicious custom account)
+│
+│   Auction contract execution
+│   ├─ set_reentrancy_guard()                ← GUARD SET (flag = true)
+│   ├─ bidder.require_auth()                 ← triggers M.__check_auth
+│   │
+│   │   M.__check_auth() execution           ← REENTRANT CALL
+│   │   └─ call place_bid(auction_id,        ← re-enters before outer
+│   │            amount=X+1)                    call completes
+│   │       Auction contract (inner)
+│   │       ├─ set_reentrancy_guard()
+│   │       │       current flag == true
+│   │       │       → panic! AuctionError::Reentrancy   ✓ BLOCKED
+│   │       └─ (inner call reverts)
+│   │
+│   ├─ <validation continues normally>
+│   ├─ refund previous bidder H
+│   ├─ record M as highest bidder
+│   └─ clear_reentrancy_guard()              ← GUARD CLEARED (flag = false)
+│
+└─ outer call succeeds normally
+```
+
+Without the guard, the inner `place_bid` would run against **stale state**
+(old highest bidder, old highest bid) and could manipulate the auction outcome
+or drain funds via double-refund.
+
+---
+
+### Attack Scenario — `claim_auction` via `__check_auth`
+
+```
+Attacker transaction
+│
+├─ 1. call claim_auction(auction_id)         ← outer call begins
+│       winner = M (malicious custom account)
+│
+│   Auction contract execution
+│   ├─ set_reentrancy_guard()                ← GUARD SET
+│   ├─ winner.require_auth()                 ← triggers M.__check_auth
+│   │
+│   │   M.__check_auth() execution
+│   │   └─ call claim_auction(auction_id)    ← re-enters before
+│   │       Auction contract (inner)            settlement flag is set
+│   │       ├─ set_reentrancy_guard()
+│   │       │       current flag == true
+│   │       │       → panic! AuctionError::Reentrancy   ✓ BLOCKED
+│   │       └─ (inner call reverts)
+│   │
+│   ├─ mark auction as claimed
+│   │       AuctionKey::Claimed(id) = true
+│   ├─ transfer asset to winner
+│   └─ clear_reentrancy_guard()              ← GUARD CLEARED
+│
+└─ outer call succeeds; double-claim prevented
+```
+
+A successful double-`claim_auction` would let the attacker receive the
+auctioned asset twice while paying only once.
+
+---
+
+### Mitigation — `set_reentrancy_guard` / `clear_reentrancy_guard`
+
+**Location:**
+`gateway-contract/contracts/auction_contract/src/storage.rs`
+— functions `set_reentrancy_guard` and `clear_reentrancy_guard`.
+
+**Mechanism**
+
+| Step | What happens |
+|---|---|
+| Function entry | `set_reentrancy_guard(env)` reads the instance-storage key `Symbol("reentrancy")`. If already `true`, panics with `AuctionError::Reentrancy`. Otherwise writes `true`. |
+| `require_auth()` call | Any `__check_auth` callback that tries to re-enter sees `flag == true` and is rejected immediately. |
+| Function exit (success **or** panic) | `clear_reentrancy_guard(env)` writes `false`. Soroban's transactional execution means a panic rolls back all storage writes including the guard, so the flag is always consistent after the transaction settles. |
+
+**Storage layout**
+
+```
+Instance storage
+└─ key:   Symbol("reentrancy")   // defined in reentrancy_key()
+   value: bool
+           false  →  no call in progress (safe to enter)
+           true   →  call in progress    (reject re-entry)
+```
+
+**CEI ordering enforced by the guard**
+
+```
+// place_bid / claim_auction call ordering
+set_reentrancy_guard(env)          // Check  — reject if already locked
+caller.require_auth()              // Effect — auth (may trigger __check_auth)
+<read and validate state>          // Check  — business logic
+<mutate state>                     // Effect — storage writes
+<external token transfer>          // Interact — CPI to token contract
+clear_reentrancy_guard(env)        // Release — unlock for next call
+```
+
+The guard enforces **CEI (Check-Effect-Interact)** ordering even when the
+Soroban host's `__check_auth` mechanism tries to insert an interaction
+between the Check and Effect phases.
+
+---
+
+### Why Instance Storage for the Guard
+
+Instance storage lives in a single ledger entry and is loaded atomically at
+the start of each contract invocation. Using it for the guard means:
+
+- No extra persistent-storage round-trips.
+- The flag is scoped to this contract instance — a different auction contract
+  deployment has its own flag.
+- Soroban rolls back instance storage on panic, so a failed inner call cannot
+  leave the guard permanently set.
+
+---
+
+### Residual Risk and Mitigations
+
+| Residual risk | Status |
+|---|---|
+| Guard not cleared on panic path | Mitigated — Soroban rolls back all storage on `panic_with_error`, including the `true` write. |
+| Guard set but `require_auth` never called | Not exploitable — the flag just gets cleared at the end of the same call. |
+| Multiple concurrent callers (parallel transactions) | Not applicable — each Soroban transaction executes serially against a snapshot; instance storage is per-invocation. |
+| `__check_auth` calls a *different* entrypoint not guarded | Out of scope for this guard. All state-mutating entrypoints that perform token transfers (`place_bid`, `claim_auction`) are individually guarded. |
+
+---
+
+### Related Functions Protected by the Guard
+
+| Entrypoint | File | Guard applied |
+|---|---|---|
+| `place_bid` | `gateway-contract/contracts/auction_contract/src/lib.rs` | `set_reentrancy_guard` / `clear_reentrancy_guard` |
+| `claim_auction` | `gateway-contract/contracts/auction_contract/src/lib.rs` | `set_reentrancy_guard` / `clear_reentrancy_guard` |
+| `draw_credit` | `contracts/credit/src/lib.rs` | Mirrors the same guard pattern |
+| `repay_credit` | `contracts/credit/src/lib.rs` | Mirrors the same guard pattern |

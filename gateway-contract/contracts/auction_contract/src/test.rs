@@ -13,7 +13,7 @@ mod tests {
     use soroban_sdk::testutils::{Address as _};
     use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
     use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
-    use soroban_sdk::{Address, Env, IntoVal, Symbol, TryFromVal, TryIntoVal};
+    use soroban_sdk::{Address, Env, Symbol, TryFromVal, TryIntoVal};
 
     const REFUND_TOPIC: &str = "BID_RFDN";
     const SETTLEMENT_TOPIC: &str = "LIQ_SETL";
@@ -331,7 +331,6 @@ mod tests {
             &None,
         );
 
-        let mut seed: u64 = 0x11ce_f00d_cafe_beef;
         let mut seed: u64 = 0xdeadbeef_cafe_beef;
         let mut highest = 0_i128;
         for _ in 0..8 {
@@ -456,7 +455,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn settle_default_liquidation_replay_reverts() {
         let env = Env::default();
         env.mock_all_auths();
@@ -482,11 +480,16 @@ mod tests {
         );
         client.close_auction(&auction_id);
         client.settle_default_liquidation(&auction_id, &credit_contract, &borrower);
-        // second call must panic
-        client.settle_default_liquidation(&auction_id, &credit_contract, &borrower);
+
+        // second call must return AlreadySettled error code, not a string panic
         let replay =
             client.try_settle_default_liquidation(&auction_id, &credit_contract, &borrower);
-        assert!(replay.is_err(), "settlement replay should panic");
+        assert!(replay.is_err(), "settlement replay should fail");
+        assert_eq!(
+            replay.unwrap_err().unwrap(),
+            AuctionError::AlreadySettled.into(),
+            "replay must return AlreadySettled error code"
+        );
     }
 
     #[test]
@@ -558,17 +561,16 @@ mod tests {
         );
         client.close_auction(&auction_id);
 
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            client.settle_default_liquidation(
-                &auction_id,
-                &Address::generate(&env),
-                &Address::generate(&env),
-            );
-        }));
-
-        assert!(
-            result.is_err(),
-            "should revert when factory contract is unset"
+        let result = client.try_settle_default_liquidation(
+            &auction_id,
+            &Address::generate(&env),
+            &Address::generate(&env),
+        );
+        assert!(result.is_err(), "should revert when factory contract is unset");
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            AuctionError::NoFactoryContract.into(),
+            "must return NoFactoryContract error code"
         );
     }
 
@@ -583,7 +585,7 @@ mod tests {
         let credit_contract = Address::generate(&env);
         let auction_id = Symbol::new(&env, "wrong_caller");
 
-        // Setup: register factory and close an auction
+        // Setup with full mocks so init/close succeed.
         env.mock_all_auths();
         client.set_factory_contract(&factory);
         client.init_auction(
@@ -598,52 +600,25 @@ mod tests {
         );
         client.close_auction(&auction_id);
 
-        // Attempt settlement with no auth provided — factory.require_auth() will reject
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            // Create a fresh env without mock_all_auths so require_auth fails
-            let env2 = Env::default();
-            let contract_id2 = env2.register(Auction, ());
-            let client2 = AuctionClient::new(&env2, &contract_id2);
-            let factory2 = Address::generate(&env2);
-            let auction_id2 = Symbol::new(&env2, "wrong_caller2");
-            // Setup with mocks
-            env2.mock_all_auths();
-            client2.set_factory_contract(&factory2);
-            client2.init_auction(
-                &auction_id2,
-                &AuctionMode::English,
-                &0,
-                &1000,
-                &50_i128,
-                &0_u32,
-                &None,
-                &None,
-            );
-            client2.close_auction(&auction_id2);
-            // Call with only a non-factory address authorized
-            let wrong_caller = Address::generate(&env2);
-            client2
-                .mock_auths(&[soroban_sdk::testutils::MockAuth {
-                    address: &wrong_caller,
-                    invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                        contract: &contract_id2,
-                        fn_name: "settle_default_liquidation",
-                        args: (
-                            auction_id2.clone(),
-                            Address::generate(&env2),
-                            Address::generate(&env2),
-                        )
-                            .into_val(&env2),
-                        sub_invokes: &[],
-                    },
-                }])
-                .settle_default_liquidation(
-                    &auction_id2,
-                    &Address::generate(&env2),
-                    &Address::generate(&env2),
-                );
-        }));
-
+        // Only authorize a non-factory address; factory.require_auth() will reject.
+        let wrong = Address::generate(&env);
+        use soroban_sdk::IntoVal;
+        let result = client
+            .mock_auths(&[soroban_sdk::testutils::MockAuth {
+                address: &wrong,
+                invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "settle_default_liquidation",
+                    args: (
+                        auction_id.clone(),
+                        credit_contract.clone(),
+                        borrower.clone(),
+                    )
+                        .into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_settle_default_liquidation(&auction_id, &credit_contract, &borrower);
         assert!(result.is_err(), "wrong caller should be rejected");
     }
 
@@ -685,7 +660,7 @@ mod tests {
         let bidder = Address::generate(&env);
         let borrower = Address::generate(&env);
         let credit_contract = Address::generate(&env);
-        let auction_id = Symbol::new(&env, "no_factory");
+        let auction_id = Symbol::new(&env, "no_factory2");
 
         client.init_auction(
             &auction_id,
@@ -700,32 +675,30 @@ mod tests {
         client.place_bid(&auction_id, &bidder, &420_i128);
         client.close_auction(&auction_id);
 
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            client.settle_default_liquidation(&auction_id, &credit_contract, &borrower);
-        }));
-
-        assert!(result.is_err(), "should panic if factory not set");
+        let result =
+            client.try_settle_default_liquidation(&auction_id, &credit_contract, &borrower);
+        assert!(result.is_err(), "should fail if factory not set");
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            AuctionError::NoFactoryContract.into(),
+            "must return NoFactoryContract error code"
+        );
     }
 
     #[test]
     fn settle_default_liquidation_requires_authorized_factory() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register(Auction, ());
         let client = AuctionClient::new(&env, &contract_id);
 
         let factory = Address::generate(&env);
-        let intruder = Address::generate(&env);
         let bidder = Address::generate(&env);
         let borrower = Address::generate(&env);
         let credit_contract = Address::generate(&env);
         let auction_id = Symbol::new(&env, "unauth");
 
-        env.as_contract(&contract_id, || {
-            set_factory_contract(&env, &factory);
-        });
-
-        // Use mock_all_auths for setup
-        env.mock_all_auths();
+        client.set_factory_contract(&factory);
         client.init_auction(
             &auction_id,
             &AuctionMode::English,
@@ -739,21 +712,32 @@ mod tests {
         client.place_bid(&auction_id, &bidder, &420_i128);
         client.close_auction(&auction_id);
 
-        // This test may not work perfectly with mock_all_auths() active.
-        // Let's just try to settle as intruder and expect panic,
-        // if it fails, I'll need a better way to handle auth.
-        let result = env.as_contract(&intruder, || {
-            catch_unwind(AssertUnwindSafe(|| {
-                client.settle_default_liquidation(&auction_id, &credit_contract, &borrower);
-            }))
-        });
-
-        assert!(result.is_err(), "should panic if unauthorized caller");
+        // Only authorize a non-factory address — factory.require_auth() will reject.
+        let intruder = Address::generate(&env);
+        use soroban_sdk::IntoVal;
+        let result = client
+            .mock_auths(&[soroban_sdk::testutils::MockAuth {
+                address: &intruder,
+                invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "settle_default_liquidation",
+                    args: (
+                        auction_id.clone(),
+                        credit_contract.clone(),
+                        borrower.clone(),
+                    )
+                        .into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_settle_default_liquidation(&auction_id, &credit_contract, &borrower);
+        assert!(result.is_err(), "should fail if unauthorized caller");
     }
 
     #[test]
     fn settle_default_liquidation_succeeds_with_factory() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register(Auction, ());
         let client = AuctionClient::new(&env, &contract_id);
         let factory = Address::generate(&env);
@@ -762,12 +746,7 @@ mod tests {
         let credit_contract = Address::generate(&env);
         let auction_id = Symbol::new(&env, "auth_success");
 
-        env.as_contract(&contract_id, || {
-            set_factory_contract(&env, &factory);
-        });
-
-        // Use mock_all_auths for setup
-        env.mock_all_auths();
+        client.set_factory_contract(&factory);
         client.init_auction(
             &auction_id,
             &AuctionMode::English,
@@ -780,15 +759,12 @@ mod tests {
         );
         client.place_bid(&auction_id, &bidder, &420_i128);
         client.close_auction(&auction_id);
-
-        // Call as factory
-        env.as_contract(&factory, || {
-            client.settle_default_liquidation(&auction_id, &credit_contract, &borrower);
-        });
+        client.settle_default_liquidation(&auction_id, &credit_contract, &borrower);
 
         let events = settlement_events(&env);
         assert_eq!(events.len(), 1);
     }
+
     // ── min_increment_bps: validation at init ──────────────────────────────
 
     #[test]
@@ -1355,6 +1331,7 @@ mod reentrancy_exploration {
     extern crate std;
     use super::super::*;
     use crate::errors::AuctionError;
+    use crate::{Auction, AuctionClient, AuctionMode, AuctionStatus};
     use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::{Address, Env, Symbol};
 
@@ -1573,6 +1550,7 @@ mod reentrancy_exploration {
 mod reentrancy_preservation {
     extern crate std;
     use super::*;
+    use crate::{Auction, AuctionClient, AuctionMode, AuctionStatus};
     use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
     use soroban_sdk::{Address, Env, Symbol, TryFromVal, TryIntoVal};
 

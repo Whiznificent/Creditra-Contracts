@@ -54,11 +54,12 @@
 
 #![warn(missing_docs)]
 
-use crate::events::{publish_interest_accrued_event, InterestAccruedEvent, publish_penalty_rate_entered_event, publish_penalty_rate_exited_event};
+use crate::events::{publish_interest_accrued_event, InterestAccruedEvent, publish_penalty_rate_entered_event, publish_penalty_rate_exited_event, publish_grace_waiver_applied_event};
 use crate::storage::persist_credit_line;
 use crate::types::{ContractError, CreditLineData, CreditStatus, GracePeriodConfig, GraceWaiverMode};
 use crate::math_utils::{prorate_interest, Rounding};
 use soroban_sdk::{Address, Env, Vec};
+use crate::storage::get_credit_line;
 
 /// Compute and apply accrued interest to a credit line for the elapsed period.
 ///
@@ -236,6 +237,35 @@ pub fn apply_accrual(env: &Env, mut line: CreditLineData) -> CreditLineData {
                             Rounding::Floor,
                         ),
                     };
+
+                    // Calculate waived amount for grace waiver event
+                    let full_rate_interest = prorate_interest(
+                        line.utilized_amount as u128,
+                        effective_rate_bps,
+                        in_window_secs,
+                        Rounding::Floor,
+                    ) as i128;
+
+                    let actual_interest = match cfg.waiver_mode {
+                        GraceWaiverMode::FullWaiver => 0,
+                        GraceWaiverMode::ReducedRate => prorate_interest(
+                            line.utilized_amount as u128,
+                            cfg.reduced_rate_bps,
+                            in_window_secs,
+                            Rounding::Floor,
+                        ) as i128,
+                    };
+
+                    let waived_amount = full_rate_interest.saturating_sub(actual_interest);
+                    if waived_amount > 0 {
+                        publish_grace_waiver_applied_event(
+                            env,
+                            &line.borrower,
+                            waived_amount,
+                            cfg.waiver_mode,
+                        );
+                    }
+
                     let post_window = prorate_interest(
                         line.utilized_amount as u128,
                         effective_rate_bps,
@@ -292,4 +322,26 @@ pub fn apply_accrual(env: &Env, mut line: CreditLineData) -> CreditLineData {
     }
 
     line
+}
+
+/// Materialize interest accrual for a bounded list of borrowers.
+///
+/// No auth is required: the call only updates accounting state for lines
+/// that already exist and are `Active`. Missing lines and non-active lines
+/// are skipped without reverting the whole batch. Only non-zero accruals
+/// emit `InterestAccruedEvent`.
+pub fn accrue_batch(env: &Env, borrowers: Vec<Address>) {
+    for borrower in borrowers.iter() {
+        if let Some(stored_line) = get_credit_line(env, &borrower) {
+            if stored_line.status == CreditStatus::Active && stored_line.utilized_amount > 0 {
+                let previous_utilized = stored_line.utilized_amount;
+                let previous_ts = stored_line.last_accrual_ts;
+                let updated = apply_accrual(env, stored_line);
+                // Only persist if accrual actually changed the line
+                if updated.utilized_amount != previous_utilized || updated.last_accrual_ts != previous_ts {
+                    persist_credit_line(env, &borrower, &updated, previous_utilized);
+                }
+            }
+        }
+    }
 }

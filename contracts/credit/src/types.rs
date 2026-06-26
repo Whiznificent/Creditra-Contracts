@@ -11,7 +11,9 @@
 //! - [`ContractError`] — 38-variant `#[repr(u32)]` error enum (discriminants
 //!   pinned by `tests/error_discriminants.rs`). See
 //!   [`docs/contract-errors.md`](../../../docs/contract-errors.md) for the
-//!   categorized reference.
+//!   flat code table and
+//!   [`docs/error-taxonomy.md`](../../../docs/error-taxonomy.md) for the
+//!   categorized reference with recovery hints.
 //! - [`CreditStatus`] — 5-variant state-machine label (Active=0,
 //!   Suspended=1, Defaulted=2, Closed=3, Restricted=4). See
 //!   [`docs/state-machine.md`](../../../docs/state-machine.md) for the
@@ -28,8 +30,8 @@
 //!   (FullWaiver vs ReducedRate) consumed by [`crate::accrual`].
 //! - [`OracleConfig`] — price-feed circuit-breaker parameters
 //!   `(max_deviation_bps, max_age_seconds)`.
-//! - [`ProtocolConfig`] — host-side projection used by
-//!   `get_protocol_config` (NOT `#[contracttype]`).
+//! - [`ProtocolConfig`] / [`ProtocolSummary`] — host-side projections used by
+//!   aggregate protocol queries (NOT `#[contracttype]`).
 //!
 //! # How
 //!
@@ -344,20 +346,37 @@ pub struct RateFormulaConfigEvent {
 
 /// Global protocol configuration.
 ///
-/// This is **not** a `#[contracttype]` — it never crosses the host boundary.
-/// It is a Rust-side projection of the instance-storage keys
+/// A projection of the instance-storage keys
 /// [`crate::storage::DataKey::LiquidityToken`] and
-/// [`crate::storage::DataKey::LiquiditySource`], used by helpers that want to
-/// inspect both values together (e.g. during the draw pre-flight check).
+/// [`crate::storage::DataKey::LiquiditySource`], returned by
+/// `get_protocol_config` for integrators who need to inspect both
+/// values in a single call.
 ///
 /// Either field may be `None` if the corresponding key has not been set; in
 /// that case the relevant entrypoints panic with
 /// [`ContractError::MissingLiquidityToken`] or
 /// [`ContractError::MissingLiquiditySource`].
+#[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolConfig {
     /// Configured liquidity token.
     pub liquidity_token: Option<Address>,
     /// Configured liquidity source.
     pub liquidity_source: Option<Address>,
+}
+
+/// Global protocol aggregate balances.
+///
+/// Returned by `get_protocol_summary` as a Soroban ABI value.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolSummary {
+    /// Number of indexed credit lines.
+    pub count: u32,
+    /// Global utilized principal accumulator.
+    pub total_utilized: i128,
+    /// Global collateral balance accumulator.
+    pub total_collateral: i128,
+    /// Accumulated protocol fees awaiting treasury withdrawal.
+    pub treasury_balance: i128,
 }
