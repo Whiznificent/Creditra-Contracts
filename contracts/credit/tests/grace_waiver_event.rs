@@ -17,17 +17,21 @@ fn setup(env: &Env) -> (CreditClient, Address, Address) {
 fn test_full_waiver_emits_event() {
     let env = Env::default();
     let (client, _admin, borrower) = setup(&env);
-    
+
     // Suspend the borrower
     client.suspend_credit_line(&borrower);
-    
+
     // Configure grace period with FullWaiver
-    client.set_grace_period_config(&86400_u64, &creditra_credit::GraceWaiverMode::FullWaiver, &0_u32);
-    
+    client.set_grace_period_config(
+        &86400_u64,
+        &creditra_credit::GraceWaiverMode::FullWaiver,
+        &0_u32,
+    );
+
     // Advance time and trigger accrual
     env.ledger().set_timestamp(100);
     client.draw_credit(&borrower, &100_i128);
-    
+
     // Check event was emitted
     let events = env.events().all();
     let grace_event = events.iter().find(|(_, topics, _)| {
@@ -39,23 +43,30 @@ fn test_full_waiver_emits_event() {
             }
         })
     });
-    
-    assert!(grace_event.is_some(), "GraceWaiverAppliedEvent should be emitted");
+
+    assert!(
+        grace_event.is_some(),
+        "GraceWaiverAppliedEvent should be emitted"
+    );
 }
 
 #[test]
 fn test_reduced_rate_emits_event_with_difference() {
     let env = Env::default();
     let (client, _admin, borrower) = setup(&env);
-    
+
     // Suspend and configure ReducedRate
     client.suspend_credit_line(&borrower);
-    client.set_grace_period_config(&86400_u64, &creditra_credit::GraceWaiverMode::ReducedRate, &100_u32);
-    
+    client.set_grace_period_config(
+        &86400_u64,
+        &creditra_credit::GraceWaiverMode::ReducedRate,
+        &100_u32,
+    );
+
     // Trigger accrual
     env.ledger().set_timestamp(100);
     client.draw_credit(&borrower, &100_i128);
-    
+
     // Verify event emitted with non-zero waived_amount
     let events = env.events().all();
     assert!(events.iter().any(|(_, topics, _)| {

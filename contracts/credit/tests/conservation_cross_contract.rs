@@ -109,7 +109,9 @@ fn get_auction_state(
     auction_id: &Address,
     settlement_id: &Symbol,
 ) -> gateway_auction::types::AuctionState {
-    env.as_contract(auction_id, || env.storage().persistent().get(settlement_id).unwrap())
+    env.as_contract(auction_id, || {
+        env.storage().persistent().get(settlement_id).unwrap()
+    })
 }
 
 fn is_settlement_marker_set(env: &Env, auction_id: &Address, settlement_id: &Symbol) -> bool {
@@ -159,7 +161,12 @@ fn run_conservation_test(env: &Env, draw_amount: i128, highest_bid: i128) {
 
     // Verify replay fails
     let replay_result = std::panic::catch_unwind(|| {
-        credit.settle_default_liquidation(&deployment.borrower, &highest_bid, &settlement_id, &None);
+        credit.settle_default_liquidation(
+            &deployment.borrower,
+            &highest_bid,
+            &settlement_id,
+            &None,
+        );
     });
     assert!(replay_result.is_err(), "replay should panic");
 }

@@ -25,7 +25,9 @@
 //! cargo test -p gateway-auction --test status_transitions
 //! ```
 
-use gateway_auction::{Auction, AuctionClient, AuctionError, AuctionMode, AuctionState, AuctionStatus};
+use gateway_auction::{
+    Auction, AuctionClient, AuctionError, AuctionMode, AuctionState, AuctionStatus,
+};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, Symbol};
 
@@ -135,9 +137,7 @@ fn read_status(env: &Env, contract_id: &Address, auction_id: &Symbol) -> Auction
 }
 
 /// Seed an auction in `from` using only legal setup paths.
-fn setup_auction(
-    from: AuctionStatus,
-) -> (Env, Address, Symbol, Address) {
+fn setup_auction(from: AuctionStatus) -> (Env, Address, Symbol, Address) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -223,7 +223,8 @@ fn auction_status_transition_matrix() {
             let status_after = read_status(&env, &contract_id, &auction_id);
             assert_eq!(
                 status_after,
-                case.expected_to.expect("legal case must declare expected_to"),
+                case.expected_to
+                    .expect("legal case must declare expected_to"),
                 "{}: unexpected post-transition status",
                 case.label
             );

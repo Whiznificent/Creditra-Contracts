@@ -63,7 +63,9 @@ use crate::events::{publish_risk_parameters_updated, RiskParametersUpdatedEvent}
 use crate::storage::{
     assert_not_paused, assert_ts_monotonic, persist_credit_line, rate_cfg_key, rate_formula_key,
 };
-use crate::types::{ContractError, CreditLineData, CreditStatus, RateChangeConfig, RateFormulaConfig};
+use crate::types::{
+    ContractError, CreditLineData, CreditStatus, RateChangeConfig, RateFormulaConfig,
+};
 use soroban_sdk::{Address, Env};
 
 /// Maximum interest rate in basis points (100%).
@@ -129,7 +131,11 @@ pub fn compute_rate_from_score(cfg: &RateFormulaConfig, risk_score: u32) -> u32 
 }
 
 /// Set optional global rate-change caps (admin only).
-pub fn set_rate_change_limits_legacy(env: Env, max_rate_change_bps: u32, rate_change_min_interval: u64) {
+pub fn set_rate_change_limits_legacy(
+    env: Env,
+    max_rate_change_bps: u32,
+    rate_change_min_interval: u64,
+) {
     assert_not_paused(&env);
     require_admin_auth(&env);
 
@@ -182,7 +188,10 @@ pub fn set_borrower_rate_ceiling(env: Env, borrower: Address, ceiling_bps: Optio
 pub fn set_penalty_surcharge_bps(env: Env, bps: u32) {
     assert_not_paused(&env);
     require_admin_auth(&env);
-    assert!(bps <= MAX_INTEREST_RATE_BPS, "penalty surcharge exceeds max rate");
+    assert!(
+        bps <= MAX_INTEREST_RATE_BPS,
+        "penalty surcharge exceeds max rate"
+    );
     crate::storage::set_penalty_surcharge_bps(&env, bps);
 }
 
@@ -303,11 +312,12 @@ pub fn update_risk_parameters(
     };
 
     // Apply per-borrower rate floor if configured
-    let mut final_rate = if let Some(floor) = crate::storage::get_borrower_rate_floor(&env, &borrower) {
-        effective_rate.max(floor)
-    } else {
-        effective_rate
-    };
+    let mut final_rate =
+        if let Some(floor) = crate::storage::get_borrower_rate_floor(&env, &borrower) {
+            effective_rate.max(floor)
+        } else {
+            effective_rate
+        };
 
     // Apply per-borrower rate ceiling if configured
     if let Some(ceiling) = crate::storage::get_borrower_rate_ceiling(&env, &borrower) {
@@ -323,7 +333,10 @@ pub fn update_risk_parameters(
             }
 
             if cfg.rate_change_min_interval > 0 && credit_line.last_rate_update_ts > 0 {
-                let elapsed = env.ledger().timestamp().saturating_sub(credit_line.last_rate_update_ts);
+                let elapsed = env
+                    .ledger()
+                    .timestamp()
+                    .saturating_sub(credit_line.last_rate_update_ts);
                 if elapsed < cfg.rate_change_min_interval {
                     env.panic_with_error(ContractError::TimestampRegression);
                 }

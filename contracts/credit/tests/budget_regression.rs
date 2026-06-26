@@ -53,7 +53,9 @@ fn load_baselines() -> HashMap<String, Baseline> {
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
     let list: Vec<Baseline> =
         serde_json::from_str(&raw).unwrap_or_else(|e| panic!("bad JSON in snapshot: {e}"));
-    list.into_iter().map(|b| (b.entrypoint.clone(), b)).collect()
+    list.into_iter()
+        .map(|b| (b.entrypoint.clone(), b))
+        .collect()
 }
 
 /// Assert that `observed` is within `±tolerance_pct` of `baseline`.
@@ -100,7 +102,9 @@ fn setup() -> (
     let borrower = Address::generate(&env);
 
     // Deploy a SAC token so liquidity transfers work.
-    let token_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let token = token::StellarAssetClient::new(&env, &token_id);
     token.mint(&admin, &1_000_000_000_i128);
 
@@ -190,7 +194,9 @@ fn budget_open_credit_line() {
     if let Some(b) = baselines.get("open_credit_line") {
         assert_within_tolerance("open_credit_line", cpu, mem, b);
     } else {
-        println!("[budget_regression] no baseline for 'open_credit_line'; observed cpu={cpu} mem={mem}");
+        println!(
+            "[budget_regression] no baseline for 'open_credit_line'; observed cpu={cpu} mem={mem}"
+        );
     }
 }
 
@@ -240,7 +246,9 @@ fn budget_repay_credit() {
     if let Some(b) = baselines.get("repay_credit") {
         assert_within_tolerance("repay_credit", cpu, mem, b);
     } else {
-        println!("[budget_regression] no baseline for 'repay_credit'; observed cpu={cpu} mem={mem}");
+        println!(
+            "[budget_regression] no baseline for 'repay_credit'; observed cpu={cpu} mem={mem}"
+        );
     }
 }
 
@@ -274,9 +282,9 @@ fn budget_set_rate_formula_config() {
 
     env.budget().reset_unlimited();
     credit.set_rate_formula_config(
-        &200_u32, // base_rate_bps
-        &10_u32,  // slope
-        &100_u32, // r_min_bps
+        &200_u32,   // base_rate_bps
+        &10_u32,    // slope
+        &100_u32,   // r_min_bps
         &2_000_u32, // r_max_bps
     );
 
@@ -405,7 +413,9 @@ fn budget_accrue_batch() {
     if let Some(b) = baselines.get("accrue_batch") {
         assert_within_tolerance("accrue_batch", cpu, mem, b);
     } else {
-        println!("[budget_regression] no baseline for 'accrue_batch'; observed cpu={cpu} mem={mem}");
+        println!(
+            "[budget_regression] no baseline for 'accrue_batch'; observed cpu={cpu} mem={mem}"
+        );
     }
 }
 
@@ -424,7 +434,9 @@ fn budget_pause_protocol() {
     if let Some(b) = baselines.get("pause_protocol") {
         assert_within_tolerance("pause_protocol", cpu, mem, b);
     } else {
-        println!("[budget_regression] no baseline for 'pause_protocol'; observed cpu={cpu} mem={mem}");
+        println!(
+            "[budget_regression] no baseline for 'pause_protocol'; observed cpu={cpu} mem={mem}"
+        );
     }
 }
 
@@ -444,7 +456,9 @@ fn budget_unpause_protocol() {
     if let Some(b) = baselines.get("unpause_protocol") {
         assert_within_tolerance("unpause_protocol", cpu, mem, b);
     } else {
-        println!("[budget_regression] no baseline for 'unpause_protocol'; observed cpu={cpu} mem={mem}");
+        println!(
+            "[budget_regression] no baseline for 'unpause_protocol'; observed cpu={cpu} mem={mem}"
+        );
     }
 }
 
@@ -494,6 +508,8 @@ fn budget_close_credit_line() {
     if let Some(b) = baselines.get("close_credit_line") {
         assert_within_tolerance("close_credit_line", cpu, mem, b);
     } else {
-        println!("[budget_regression] no baseline for 'close_credit_line'; observed cpu={cpu} mem={mem}");
+        println!(
+            "[budget_regression] no baseline for 'close_credit_line'; observed cpu={cpu} mem={mem}"
+        );
     }
 }

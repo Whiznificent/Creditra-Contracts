@@ -54,12 +54,17 @@
 
 #![warn(missing_docs)]
 
-use crate::events::{publish_interest_accrued_event, InterestAccruedEvent, publish_penalty_rate_entered_event, publish_penalty_rate_exited_event, publish_grace_waiver_applied_event};
-use crate::storage::persist_credit_line;
-use crate::types::{ContractError, CreditLineData, CreditStatus, GracePeriodConfig, GraceWaiverMode};
+use crate::events::{
+    publish_grace_waiver_applied_event, publish_interest_accrued_event,
+    publish_penalty_rate_entered_event, publish_penalty_rate_exited_event, InterestAccruedEvent,
+};
 use crate::math_utils::{prorate_interest, Rounding};
-use soroban_sdk::{Address, Env, Vec};
 use crate::storage::get_credit_line;
+use crate::storage::persist_credit_line;
+use crate::types::{
+    ContractError, CreditLineData, CreditStatus, GracePeriodConfig, GraceWaiverMode,
+};
+use soroban_sdk::{Address, Env, Vec};
 
 /// Compute and apply accrued interest to a credit line for the elapsed period.
 ///
@@ -158,7 +163,7 @@ pub fn apply_accrual(env: &Env, mut line: CreditLineData) -> CreditLineData {
     // Check if the borrower is delinquent to apply penalty surcharge
     let is_delinquent = crate::query::is_delinquent(env.clone(), line.borrower.clone());
     let penalty_surcharge_bps = crate::storage::get_penalty_surcharge_bps(env);
-    
+
     // Track previous rate to detect penalty rate entry/exit
     let previous_effective_rate = line.interest_rate_bps;
 
@@ -338,7 +343,9 @@ pub fn accrue_batch(env: &Env, borrowers: Vec<Address>) {
                 let previous_ts = stored_line.last_accrual_ts;
                 let updated = apply_accrual(env, stored_line);
                 // Only persist if accrual actually changed the line
-                if updated.utilized_amount != previous_utilized || updated.last_accrual_ts != previous_ts {
+                if updated.utilized_amount != previous_utilized
+                    || updated.last_accrual_ts != previous_ts
+                {
                     persist_credit_line(env, &borrower, &updated, previous_utilized);
                 }
             }

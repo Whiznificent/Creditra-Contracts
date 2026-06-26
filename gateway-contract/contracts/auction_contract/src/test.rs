@@ -565,7 +565,10 @@ mod tests {
             &Address::generate(&env),
             &Address::generate(&env),
         );
-        assert!(result.is_err(), "should revert when factory contract is unset");
+        assert!(
+            result.is_err(),
+            "should revert when factory contract is unset"
+        );
         assert_eq!(
             result.unwrap_err().unwrap(),
             AuctionError::NoFactoryContract.into(),
@@ -1760,7 +1763,10 @@ mod reentrancy_preservation {
         client.close_auction(&auction_id);
 
         let recovered = client.settle_default_liquidation(&auction_id, &credit_contract, &borrower);
-        assert_eq!(recovered, 420_i128, "recovered amount must equal highest_bid");
+        assert_eq!(
+            recovered, 420_i128,
+            "recovered amount must equal highest_bid"
+        );
 
         // Verify LIQ_SETL event was emitted
         let mut settlement_found = false;

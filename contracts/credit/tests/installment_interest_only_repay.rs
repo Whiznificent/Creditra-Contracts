@@ -23,6 +23,7 @@
 //! All tests use `env.ledger().with_mut(...)` for deterministic timestamp
 //! control — no wall-clock dependence.
 
+use creditra_credit::{Credit, CreditClient};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     token, Address, Env,
@@ -107,12 +108,18 @@ fn setup() -> Ctx {
     credit.set_repayment_schedule(
         &borrower,
         &AMOUNT_PER_PERIOD,
-        &(T0 + PERIOD),  // first_due_ts
-        &PERIOD,          // period_secs
-        &6_u32,           // num_periods
+        &(T0 + PERIOD), // first_due_ts
+        &PERIOD,        // period_secs
+        &6_u32,         // num_periods
     );
 
-    Ctx { env, credit, token, admin, borrower }
+    Ctx {
+        env,
+        credit,
+        token,
+        admin,
+        borrower,
+    }
 }
 
 /// Compute the interest that has accrued on `principal` at `RATE_BPS` over
@@ -127,8 +134,7 @@ fn setup() -> Ctx {
 /// Using integer arithmetic (truncating), the same as `math_utils::prorate_interest`.
 fn accrued_interest(principal: i128, elapsed_secs: u64) -> i128 {
     const YEAR: u64 = 365 * 24 * 3_600;
-    (principal * RATE_BPS as i128 * elapsed_secs as i128)
-        / (10_000 * YEAR as i128)
+    (principal * RATE_BPS as i128 * elapsed_secs as i128) / (10_000 * YEAR as i128)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -201,9 +207,7 @@ fn interest_plus_installment_advances_one_period() {
     let ctx = setup();
 
     // Advance to exactly the first due date.
-    ctx.env
-        .ledger()
-        .with_mut(|l| l.timestamp = T0 + PERIOD);
+    ctx.env.ledger().with_mut(|l| l.timestamp = T0 + PERIOD);
 
     let due_ts_before = next_due_ts(&ctx);
 
@@ -238,9 +242,7 @@ fn interest_plus_installment_advances_one_period() {
 fn partial_principal_does_not_advance() {
     let ctx = setup();
 
-    ctx.env
-        .ledger()
-        .with_mut(|l| l.timestamp = T0 + PERIOD);
+    ctx.env.ledger().with_mut(|l| l.timestamp = T0 + PERIOD);
 
     let due_ts_before = next_due_ts(&ctx);
 
@@ -275,9 +277,7 @@ fn partial_principal_does_not_advance() {
 fn double_principal_advances_only_one_period() {
     let ctx = setup();
 
-    ctx.env
-        .ledger()
-        .with_mut(|l| l.timestamp = T0 + PERIOD);
+    ctx.env.ledger().with_mut(|l| l.timestamp = T0 + PERIOD);
 
     let due_ts_before = next_due_ts(&ctx);
 
@@ -314,20 +314,14 @@ fn double_principal_advances_only_one_period() {
 fn zero_repay_does_not_advance() {
     let ctx = setup();
 
-    ctx.env
-        .ledger()
-        .with_mut(|l| l.timestamp = T0 + PERIOD);
+    ctx.env.ledger().with_mut(|l| l.timestamp = T0 + PERIOD);
 
     let due_ts_before = next_due_ts(&ctx);
 
     // Some contracts reject a zero amount; catch that gracefully.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ctx.token.approve(
-            &ctx.borrower,
-            &ctx.credit.address,
-            &0_i128,
-            &100_000_u32,
-        );
+        ctx.token
+            .approve(&ctx.borrower, &ctx.credit.address, &0_i128, &100_000_u32);
         ctx.credit.repay_credit(&ctx.borrower, &0_i128);
     }));
 
@@ -359,9 +353,7 @@ fn sequential_interest_only_then_full_repay() {
 
     // ── Step 1: interest-only payment at 15 days ──────────────────────────
     let midpoint = 15 * 24 * 3_600_u64;
-    ctx.env
-        .ledger()
-        .with_mut(|l| l.timestamp = T0 + midpoint);
+    ctx.env.ledger().with_mut(|l| l.timestamp = T0 + midpoint);
 
     let interest_mid = accrued_interest(DRAW_AMOUNT, midpoint);
     ctx.token.approve(
@@ -384,9 +376,7 @@ fn sequential_interest_only_then_full_repay() {
     // (interest was cleared, no principal was paid).  Interest has continued to
     // accrue on the full principal from the draw date; we compute it for the
     // remaining half-period.
-    ctx.env
-        .ledger()
-        .with_mut(|l| l.timestamp = T0 + PERIOD);
+    ctx.env.ledger().with_mut(|l| l.timestamp = T0 + PERIOD);
 
     // Remaining interest = interest on DRAW_AMOUNT for the second 15 days.
     let interest_remaining = accrued_interest(DRAW_AMOUNT, PERIOD - midpoint);

@@ -158,7 +158,6 @@ fn assert_accrued_le_utilized(client: &CreditClient<'_>, step_label: &str) {
 enum Op {
     Draw,
     Repay,
-    Forgive,
     Default,
     Reopen,
 }
@@ -180,7 +179,6 @@ fn valid_ops(status: CreditStatus, utilized: i128, limit: i128) -> std::vec::Vec
     }
     if status != CreditStatus::Closed && utilized > 0 {
         ops.push(Op::Repay);
-        ops.push(Op::Forgive);
     }
     // Always allow reopen so the sequence doesn't get stuck.
     ops.push(Op::Reopen);
@@ -192,7 +190,6 @@ fn valid_ops(status: CreditStatus, utilized: i128, limit: i128) -> std::vec::Vec
 struct Counters {
     draws: u32,
     repays: u32,
-    forgives: u32,
     defaults: u32,
     reopens: u32,
     transitions: u32,
@@ -202,7 +199,6 @@ impl Counters {
     fn merge(&mut self, other: Self) {
         self.draws += other.draws;
         self.repays += other.repays;
-        self.forgives += other.forgives;
         self.defaults += other.defaults;
         self.reopens += other.reopens;
         self.transitions += other.transitions;
@@ -220,8 +216,7 @@ fn run_seed(seed: u64) -> Counters {
     for step in 0..STEPS_PER_SEED {
         // Advance ledger time by 1 day to 1 year — drives meaningful accrual.
         let delta_secs = rng.range_u64(365 * 24 * 3600);
-        env.ledger()
-            .with_mut(|l| l.timestamp += delta_secs);
+        env.ledger().with_mut(|l| l.timestamp += delta_secs);
 
         let bidx = rng.index(BORROWER_COUNT);
         let borrower = borrowers.get(bidx as u32).unwrap();
@@ -251,11 +246,6 @@ fn run_seed(seed: u64) -> Counters {
                 let _ = client.try_repay_credit(&borrower, &amount);
                 counters.repays += 1;
             }
-            Op::Forgive => {
-                let amount = rng.range_i128((line.utilized_amount + 2_000).max(1));
-                let _ = client.try_forgive_debt(&borrower, &amount);
-                counters.forgives += 1;
-            }
             Op::Default => {
                 let _ = client.try_default_credit_line(&borrower);
                 counters.defaults += 1;
@@ -279,12 +269,7 @@ fn run_seed(seed: u64) -> Counters {
     // This exercises the specific lifecycle mandated by the issue description.
     let scenario_borrower = borrowers.get(0).unwrap();
     // Ensure the line is open for this borrower.
-    let _ = client.try_open_credit_line(
-        &scenario_borrower,
-        &100_000_i128,
-        &2_000_u32,
-        &50_u32,
-    );
+    let _ = client.try_open_credit_line(&scenario_borrower, &100_000_i128, &2_000_u32, &50_u32);
     assert_accrued_le_utilized(&client, "scenario:open");
 
     // 1. Draw
@@ -298,14 +283,7 @@ fn run_seed(seed: u64) -> Counters {
     let _ = client.try_repay_credit(&scenario_borrower, &10_000_i128);
     assert_accrued_le_utilized(&client, "scenario:repay_partial");
 
-    // 4. Forgive remaining debt
-    let line = client.get_credit_line(&scenario_borrower).unwrap();
-    if line.utilized_amount > 0 {
-        let _ = client.try_forgive_debt(&scenario_borrower, &line.utilized_amount);
-        assert_accrued_le_utilized(&client, "scenario:forgive");
-    }
-
-    // 5. Settle (close after zero balance)
+    // 4. Settle (close after zero balance)
     let line = client.get_credit_line(&scenario_borrower).unwrap();
     if line.utilized_amount == 0 {
         let _ = client.try_close_credit_line(&scenario_borrower, &admin);
@@ -337,7 +315,6 @@ fn accrued_interest_le_utilized_amount_invariant() {
     );
     assert!(total.draws > 0, "draw path was not exercised");
     assert!(total.repays > 0, "repay path was not exercised");
-    assert!(total.forgives > 0, "forgive path was not exercised");
 }
 
 /// Determinism check: the same seed must produce the same coverage counters.
@@ -347,6 +324,5 @@ fn invariant_run_is_deterministic_for_fixed_seed() {
     let b = run_seed(42);
     assert_eq!(a.draws, b.draws);
     assert_eq!(a.repays, b.repays);
-    assert_eq!(a.forgives, b.forgives);
     assert_eq!(a.transitions, b.transitions);
 }

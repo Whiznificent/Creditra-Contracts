@@ -14,10 +14,7 @@
 //! to make regressions visible.
 
 use soroban_sdk::{testutils::Budget, token, Address, Env};
-use std::{
-    io::Write,
-    path::Path,
-};
+use std::{io::Write, path::Path};
 
 #[derive(Debug, serde::Serialize)]
 struct Baseline {
@@ -39,8 +36,7 @@ fn measure(env: &Env, f: impl FnOnce()) -> (u64, u64) {
     )
 }
 
-fn setup(
-) -> (
+fn setup() -> (
     Env,
     credit::CreditClient<'static>,
     token::StellarAssetClient<'static>,

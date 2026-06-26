@@ -160,6 +160,9 @@ fn mul_div_known_edge_cases() {
     quiet_expected_overflow_panics();
     for rounding in [Rounding::Floor, Rounding::Ceil] {
         let r = catch_unwind(move || mul_div(u128::MAX, 2, 1, rounding));
-        assert!(r.is_err(), "u128::MAX * 2 must overflow-panic ({rounding:?})");
+        assert!(
+            r.is_err(),
+            "u128::MAX * 2 must overflow-panic ({rounding:?})"
+        );
     }
 }

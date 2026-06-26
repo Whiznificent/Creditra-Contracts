@@ -1,4 +1,9 @@
+use creditra_credit::types::{ContractError, CreditStatus};
+use creditra_credit::{Credit, CreditClient};
 use gateway_auction::{Auction, AuctionClient};
+use soroban_sdk::testutils::{Address as _, Events as _};
+use soroban_sdk::{token, Address, Env, Symbol, TryFromVal, TryIntoVal};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 fn setup_auction(
     env: &Env,
@@ -17,9 +22,7 @@ fn setup_auction(
     let bidder = Address::generate(env);
     auction.place_bid(settlement_id, &bidder, &recovered_amount);
 
-    env.ledger().with_mut(|ledger| {
-        ledger.timestamp = end_time;
-    });
+    env.ledger().set_timestamp(end_time);
     auction.close_auction(settlement_id);
 }
 
@@ -140,7 +143,12 @@ fn settle_default_liquidation_requires_defaulted_status() {
     client.draw_credit(&borrower, &500_i128);
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        client.settle_default_liquidation(&borrower, &100_i128, &Symbol::new(&env, "auc_bad"), &None);
+        client.settle_default_liquidation(
+            &borrower,
+            &100_i128,
+            &Symbol::new(&env, "auc_bad"),
+            &None,
+        );
     }));
 
     assert!(result.is_err(), "non-defaulted settlement should panic");
@@ -219,20 +227,10 @@ fn settle_clears_reentrancy_guard_on_success() {
     let client = CreditClient::new(&env, &contract_id);
 
     // First settlement — should set and clear reentrancy guard
-    client.settle_default_liquidation(
-        &borrower,
-        &200_i128,
-        &Symbol::new(&env, "auc_re1"),
-        &None,
-    );
+    client.settle_default_liquidation(&borrower, &200_i128, &Symbol::new(&env, "auc_re1"), &None);
 
     // Second settlement with different id — proves guard was cleared
-    client.settle_default_liquidation(
-        &borrower,
-        &100_i128,
-        &Symbol::new(&env, "auc_re2"),
-        &None,
-    );
+    client.settle_default_liquidation(&borrower, &100_i128, &Symbol::new(&env, "auc_re2"), &None);
 
     let line = client.get_credit_line(&borrower).unwrap();
     assert_eq!(line.utilized_amount, 200); // 500 - 200 - 100

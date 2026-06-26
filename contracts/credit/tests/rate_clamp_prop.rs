@@ -52,20 +52,22 @@ const MAX_RISK_SCORE: u32 = 100;
 
 /// Strategy that generates `(min, max)` pairs satisfying `min <= max <= 10_000`.
 fn min_max() -> impl Strategy<Value = (u32, u32)> {
-    (0_u32..=MAX_INTEREST_RATE_BPS)
-        .prop_flat_map(|min| (Just(min), min..=MAX_INTEREST_RATE_BPS))
+    (0_u32..=MAX_INTEREST_RATE_BPS).prop_flat_map(|min| (Just(min), min..=MAX_INTEREST_RATE_BPS))
 }
 
 /// Strategy for a complete `RateFormulaConfig` where `min <= max <= 10_000`.
 fn rate_formula_config() -> impl Strategy<Value = RateFormulaConfig> {
-    (0_u32..=MAX_INTEREST_RATE_BPS, 0_u32..=MAX_INTEREST_RATE_BPS, min_max()).prop_map(
-        |(base, slope, (min, max))| RateFormulaConfig {
+    (
+        0_u32..=MAX_INTEREST_RATE_BPS,
+        0_u32..=MAX_INTEREST_RATE_BPS,
+        min_max(),
+    )
+        .prop_map(|(base, slope, (min, max))| RateFormulaConfig {
             base_rate_bps: base,
             slope_bps_per_score: slope,
             min_rate_bps: min,
             max_rate_bps: max,
-        },
-    )
+        })
 }
 
 /// Strategy for `(floor, ceiling)` pairs satisfying `0 <= floor <= ceiling <= 10_000`.
@@ -195,12 +197,18 @@ fn global_cap_edge_preserves_clamp_ordering() {
         let combined_lower = floor.max(cfg.min_rate_bps);
         let combined_upper = ceiling.min(cfg.max_rate_bps).min(MAX_INTEREST_RATE_BPS);
         let true_lower = cfg.min_rate_bps.max(floor).min(ceiling);
-        let true_upper = cfg.max_rate_bps.min(MAX_INTEREST_RATE_BPS).max(floor).min(ceiling);
+        let true_upper = cfg
+            .max_rate_bps
+            .min(MAX_INTEREST_RATE_BPS)
+            .max(floor)
+            .min(ceiling);
         let single_clamped = raw.clamp(true_lower, true_upper);
 
-        assert_eq!(double_clamped, single_clamped,
+        assert_eq!(
+            double_clamped, single_clamped,
             "global cap edge failed at score={}: double={}, single={}",
-            score, double_clamped, single_clamped);
+            score, double_clamped, single_clamped
+        );
     }
 }
 
@@ -224,8 +232,11 @@ fn zero_bounds_preserve_clamp_ordering() {
         let true_upper = cfg.max_rate_bps.min(MAX_INTEREST_RATE_BPS).max(0).min(0);
         let single_clamped = raw.clamp(true_lower, true_upper);
 
-        assert_eq!(double_clamped, single_clamped,
-            "zero bounds failed at score={}", score);
+        assert_eq!(
+            double_clamped, single_clamped,
+            "zero bounds failed at score={}",
+            score
+        );
     }
 }
 
@@ -246,10 +257,17 @@ fn degenerate_range_preserves_clamp_ordering() {
         // Degenerate: floor == ceiling == 3_000
         let double_clamped = formula_result.max(3_000).min(3_000);
         let true_lower = cfg.min_rate_bps.max(3_000).min(3_000);
-        let true_upper = cfg.max_rate_bps.min(MAX_INTEREST_RATE_BPS).max(3_000).min(3_000);
+        let true_upper = cfg
+            .max_rate_bps
+            .min(MAX_INTEREST_RATE_BPS)
+            .max(3_000)
+            .min(3_000);
         let single_clamped = raw.clamp(true_lower, true_upper);
 
-        assert_eq!(double_clamped, single_clamped,
-            "degenerate range failed at score={}", score);
+        assert_eq!(
+            double_clamped, single_clamped,
+            "degenerate range failed at score={}",
+            score
+        );
     }
 }

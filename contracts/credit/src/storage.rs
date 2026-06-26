@@ -71,7 +71,7 @@ use soroban_sdk::{contracttype, Address, Env, Symbol};
 ///   (`LiquidityToken`, `LiquiditySource`, `DrawsFrozen`, `SchemaVersion`,
 ///   `CreditLineCount`, `TotalUtilized`, `MaxDrawAmount`, `MaxRepayAmount`,
 ///   `DrawMinIntervalSeconds`, `MinCreditLimit`, `MaxCreditLimit`,
-///   `PenaltySurchargeBps`, `AuctionContract`, `MaxTotalExposure`,
+///   `PenaltySurchargeBps`, `LateFeeFlat`, `AuctionContract`, `MaxTotalExposure`,
 ///   `ProtocolFeeBps`, `TreasuryAddress`, `TreasuryBalance`,
 ///   `TotalCollateral`,
 ///   `MinCollateralRatioBps`, `OracleConfig`, `OracleLastPrice`,
@@ -131,6 +131,9 @@ pub enum DataKey {
     /// Penalty surcharge in basis points applied to delinquent credit lines.
     /// Admin-configurable via `set_penalty_surcharge_bps`. Default is 0.
     PenaltySurchargeBps,
+    /// Flat fee charged per missed installment.
+    /// Admin-configurable via `set_late_fee_flat`. Default is 0 (disabled).
+    LateFeeFlat,
     /// Address of the auction contract used for default-liquidation settlement hooks.
     /// Admin-configurable via `set_auction_contract`. Optional: when absent the hook
     /// is skipped and settlement proceeds as an accounting-only operation.
@@ -855,6 +858,38 @@ pub fn set_penalty_surcharge_bps(env: &Env, bps: u32) {
     env.storage()
         .instance()
         .set(&DataKey::PenaltySurchargeBps, &bps);
+}
+
+// ── Flat late fee per missed installment ─────────────────────────────────────
+
+/// Get the configured flat late fee per missed installment, if set.
+///
+/// Returns `0` when the key is absent. A return of `0` means no flat late fee
+/// is charged, preserving existing behavior for contracts that do not use this
+/// feature.
+///
+/// # Storage
+/// - **Type**: Instance storage
+/// - **Key**: [`DataKey::LateFeeFlat`]
+pub fn get_late_fee_flat(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::LateFeeFlat)
+        .unwrap_or(0)
+}
+
+/// Set the flat late fee per missed installment.
+///
+/// When non-zero, this fee is credited to `TreasuryBalance` for each
+/// installment that is detected as overdue during
+/// [`advance_repayment_schedule_after_repay`]. Admin auth must be enforced
+/// by the caller.
+///
+/// # Storage
+/// - **Type**: Instance storage
+/// - **Key**: [`DataKey::LateFeeFlat`]
+pub fn set_late_fee_flat(env: &Env, fee: i128) {
+    env.storage().instance().set(&DataKey::LateFeeFlat, &fee);
 }
 
 // ── Borrower blocklist helpers ───────────────────────────────────────────────

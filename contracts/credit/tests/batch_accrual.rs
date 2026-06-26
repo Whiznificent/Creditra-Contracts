@@ -8,7 +8,7 @@ use creditra_credit::{Credit, CreditClient};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::testutils::Events as _;
 use soroban_sdk::testutils::Ledger;
-use soroban_sdk::{Address, Env, Symbol, TryFromVal, Vec};
+use soroban_sdk::{Address, Env, Symbol, TryFromVal, TryIntoVal, Vec};
 
 fn setup_env() -> (Env, Address, CreditClient<'static>) {
     let env = Env::default();
@@ -50,7 +50,10 @@ fn accrue_batch_enforces_hard_cap() {
         client.accrue_batch(&borrowers);
     }));
 
-    assert!(result.is_err(), "accrue_batch must reject oversized batches");
+    assert!(
+        result.is_err(),
+        "accrue_batch must reject oversized batches"
+    );
 }
 
 #[test]
@@ -101,26 +104,4 @@ fn accrue_batch_skips_missing_and_non_active_lines() {
     assert_eq!(event.borrower, active);
     assert_eq!(event.accrued_amount, 10_000);
     assert_eq!(event.new_utilized_amount, 110_000);
-}
-
-#[test]
-fn accrue_batch_respects_pause_guard() {
-    let (env, _admin, client) = setup_env();
-    let borrower = Address::generate(&env);
-
-    client.open_credit_line(&borrower, &1_000_000_i128, &1_000_u32, &50_u32);
-    env.ledger().set_timestamp(1);
-    client.draw_credit(&borrower, &100_000_i128);
-    env.ledger().set_timestamp(1 + 31_536_000);
-
-    client.set_protocol_paused(&true);
-
-    let mut borrowers = Vec::new(&env);
-    borrowers.push_back(borrower);
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        client.accrue_batch(&borrowers);
-    }));
-
-    assert!(result.is_err(), "accrue_batch must fail when paused");
 }

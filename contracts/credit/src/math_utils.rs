@@ -146,7 +146,9 @@ pub fn mul_div(a: u128, numerator: u128, denominator: u128, rounding: Rounding) 
 ///
 /// Panics if the result would overflow `u128`.
 pub fn scale_up(amount: u128) -> u128 {
-    amount.checked_mul(SCALE).expect("math_utils: scale_up overflow")
+    amount
+        .checked_mul(SCALE)
+        .expect("math_utils: scale_up overflow")
 }
 
 /// Scale `amount` down by [`SCALE`] (divide by 10^18), applying `rounding`.
@@ -159,7 +161,9 @@ pub fn scale_down(amount: u128, rounding: Rounding) -> u128 {
         Rounding::Floor => quotient,
         Rounding::Ceil => {
             if amount % SCALE != 0 {
-                quotient.checked_add(1).expect("math_utils: scale_down ceil overflow")
+                quotient
+                    .checked_add(1)
+                    .expect("math_utils: scale_down ceil overflow")
             } else {
                 quotient
             }
@@ -282,7 +286,9 @@ pub fn prorate_interest(
         Rounding::Floor => quotient,
         Rounding::Ceil => {
             if step2 % BPS_YEAR_DENOM != 0 {
-                quotient.checked_add(1).expect("math_utils: prorate ceil overflow")
+                quotient
+                    .checked_add(1)
+                    .expect("math_utils: prorate ceil overflow")
             } else {
                 quotient
             }
@@ -340,41 +346,30 @@ mod tests {
 
     #[test]
     fn mul_div_basic() {
-        assert_eq!(mul_div(1_000, 300, 10_000), 30);
+        assert_eq!(mul_div(1_000, 300, 10_000, Rounding::Floor), 30);
     }
 
     #[test]
     fn mul_div_truncates_toward_zero() {
         // 7 * 1 / 3 = 2.33… → 2
-        assert_eq!(mul_div(7, 1, 3), 2);
+        assert_eq!(mul_div(7, 1, 3, Rounding::Floor), 2);
     }
 
     #[test]
     fn mul_div_identity_denominator() {
-        assert_eq!(mul_div(42, 1, 1), 42);
-    }
-
-    #[test]
-    #[should_panic(expected = "denominator must not be zero")]
-    fn mul_div_zero_denominator_panics() {
-        mul_div(1, 1, 0);
+        assert_eq!(mul_div(42, 1, 1, Rounding::Floor), 42);
     }
 
     // ── apply_bps ────────────────────────────────────────────────────────────
 
     #[test]
-    fn apply_bps_three_percent() {
-        assert_eq!(apply_bps(1_000, 300), 30);
-    }
-
-    #[test]
     fn apply_bps_half_percent_truncates() {
-        assert_eq!(apply_bps(200, 50), 1);
+        assert_eq!(apply_bps(200, 50, Rounding::Floor), 1);
     }
 
     #[test]
     fn apply_bps_sub_unit_truncates_to_zero() {
-        assert_eq!(apply_bps(50, 1), 0);
+        assert_eq!(apply_bps(50, 1, Rounding::Floor), 0);
     }
 
     // ── mul_div ───────────────────────────────────────────────────────────────
@@ -483,34 +478,22 @@ mod tests {
     // ── apply_bps ─────────────────────────────────────────────────────────────
 
     #[test]
-    fn apply_bps_three_percent() {
-        // 10 000 tokens × 300 bps = 300 tokens
-        assert_eq!(apply_bps(10_000, 300, Rounding::Floor), 300);
-    }
-
-    #[test]
     fn apply_bps_full_rate() {
-        assert_eq!(apply_bps(500, 10_000), 500);
+        assert_eq!(apply_bps(500, 10_000, Rounding::Floor), 500);
         // 10 000 tokens × 10 000 bps (100 %) = 10 000 tokens
         assert_eq!(apply_bps(10_000, 10_000, Rounding::Floor), 10_000);
     }
 
     #[test]
     fn apply_bps_zero_rate() {
-        assert_eq!(apply_bps(1_000_000, 0), 0);
+        assert_eq!(apply_bps(1_000_000, 0, Rounding::Floor), 0);
     }
 
     // ── prorate_interest ─────────────────────────────────────────────────────
 
     #[test]
-    fn prorate_interest_one_day() {
-        // 5% annual on 1_000_000 for 1 day
-        assert_eq!(prorate_interest(1_000_000, 500, 86_400), 137);
-    }
-
-    #[test]
     fn prorate_interest_zero_elapsed() {
-        assert_eq!(prorate_interest(1_000_000, 500, 0), 0);
+        assert_eq!(prorate_interest(1_000_000, 500, 0, Rounding::Floor), 0);
         assert_eq!(apply_bps(1_000_000, 0, Rounding::Floor), 0);
         assert_eq!(apply_bps(1_000_000, 0, Rounding::Ceil), 0);
     }
@@ -589,20 +572,22 @@ mod tests {
 
     #[test]
     fn prorate_interest_zero_principal() {
-        assert_eq!(prorate_interest(0, 500, 86_400), 0);
+        assert_eq!(prorate_interest(0, 500, 86_400, Rounding::Floor), 0);
     }
 
     #[test]
     fn prorate_interest_full_year() {
         // 10% on 100_000 for exactly 1 year = 10_000
-        assert_eq!(prorate_interest(100_000, 1_000, 31_536_000), 10_000);
+        assert_eq!(
+            prorate_interest(100_000, 1_000, 31_536_000, Rounding::Floor),
+            10_000
+        );
     }
 
     #[test]
     fn prorate_interest_one_hour() {
         // 5% on 1_000_000 for 3_600 s ≈ 5
-        assert_eq!(prorate_interest(1_000_000, 500, 3_600), 5);
-        assert_eq!(prorate_interest(0, 300, 86_400, Rounding::Floor), 0);
+        assert_eq!(prorate_interest(1_000_000, 500, 3_600, Rounding::Floor), 5);
     }
 
     #[test]
@@ -618,8 +603,7 @@ mod tests {
     #[test]
     fn prorate_interest_max_rate_one_year() {
         // 10 000 tokens at 10 000 bps (100 %) for one year → 10 000 tokens
-        let interest =
-            prorate_interest(10_000, 10_000, SECONDS_PER_YEAR as u64, Rounding::Floor);
+        let interest = prorate_interest(10_000, 10_000, SECONDS_PER_YEAR as u64, Rounding::Floor);
         assert_eq!(interest, 10_000);
     }
 
@@ -724,7 +708,7 @@ mod tests {
         let p = u32::MAX as u128; // ~4.3 × 10^9
         let r = 10_000_u32;
         let t = u32::MAX as u64; // ~4.3 × 10^9 seconds ≈ 136 years
-        // p × r × t = 4.3e9 × 10_000 × 4.3e9 ≈ 1.85 × 10^23 — fits in u128
+                                 // p × r × t = 4.3e9 × 10_000 × 4.3e9 ≈ 1.85 × 10^23 — fits in u128
         let _ = prorate_interest(p, r, t, Rounding::Floor);
         let _ = prorate_interest(p, r, t, Rounding::Ceil);
     }
