@@ -11,7 +11,9 @@
 //! - [`ContractError`] — 38-variant `#[repr(u32)]` error enum (discriminants
 //!   pinned by `tests/error_discriminants.rs`). See
 //!   [`docs/contract-errors.md`](../../../docs/contract-errors.md) for the
-//!   categorized reference.
+//!   flat code table and
+//!   [`docs/error-taxonomy.md`](../../../docs/error-taxonomy.md) for the
+//!   categorized reference with recovery hints.
 //! - [`CreditStatus`] — 5-variant state-machine label (Active=0,
 //!   Suspended=1, Defaulted=2, Closed=3, Restricted=4). See
 //!   [`docs/state-machine.md`](../../../docs/state-machine.md) for the
@@ -28,8 +30,8 @@
 //!   (FullWaiver vs ReducedRate) consumed by [`crate::accrual`].
 //! - [`OracleConfig`] — price-feed circuit-breaker parameters
 //!   `(max_deviation_bps, max_age_seconds)`.
-//! - [`ProtocolConfig`] — host-side projection used by
-//!   `get_protocol_config` (NOT `#[contracttype]`).
+//! - [`ProtocolConfig`] / [`ProtocolSummary`] — host-side projections used by
+//!   aggregate protocol queries (NOT `#[contracttype]`).
 //!
 //! # How
 //!
@@ -366,4 +368,21 @@ pub struct ProtocolConfig {
     pub liquidity_token: Option<Address>,
     /// Configured liquidity source.
     pub liquidity_source: Option<Address>,
+}
+
+/// Global protocol aggregate balances.
+///
+/// This is **not** a `#[contracttype]`; it is a Rust-side projection used by
+/// `get_protocol_summary` to return dashboard totals from existing aggregate
+/// storage without bumping persistent-entry TTL.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolSummary {
+    /// Number of indexed credit lines.
+    pub count: u32,
+    /// Global utilized principal accumulator.
+    pub total_utilized: i128,
+    /// Global collateral balance accumulator.
+    pub total_collateral: i128,
+    /// Accumulated protocol fees awaiting treasury withdrawal.
+    pub treasury_balance: i128,
 }
