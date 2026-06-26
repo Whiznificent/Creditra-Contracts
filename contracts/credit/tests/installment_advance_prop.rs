@@ -40,7 +40,7 @@ fn setup_env() -> (Env, Address, Address) {
     let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
     let token_address = token_id.address();
     let client = CreditClient::new(&env, &contract_id);
-    env.ledger().with_mut(|li| li.timestamp = INITIAL_TIMESTAMP);
+    env.ledger().set_timestamp(INITIAL_TIMESTAMP);
     client.init(&admin);
     client.set_liquidity_token(&token_address);
     token::StellarAssetClient::new(&env, &token_address).mint(&contract_id, &(DRAW_AMOUNT * 2));

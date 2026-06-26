@@ -15,7 +15,7 @@
 
 use creditra_credit::types::{ContractError, CreditStatus, OracleConfig};
 use creditra_credit::{Credit, CreditClient};
-use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::{Address as _, Ledger};
 use soroban_sdk::{token, Address, Env, Symbol};
 
 // ── helpers ───────────────────────────────────────────────────────────────────

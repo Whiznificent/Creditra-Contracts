@@ -1,4 +1,9 @@
+use creditra_credit::types::{ContractError, CreditStatus};
+use creditra_credit::{Credit, CreditClient};
 use gateway_auction::{Auction, AuctionClient};
+use soroban_sdk::testutils::{Address as _, Events as _};
+use soroban_sdk::{token, Address, Env, Symbol, TryFromVal, TryIntoVal};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 fn setup_auction(
     env: &Env,
@@ -17,9 +22,7 @@ fn setup_auction(
     let bidder = Address::generate(env);
     auction.place_bid(settlement_id, &bidder, &recovered_amount);
 
-    env.ledger().with_mut(|ledger| {
-        ledger.timestamp = end_time;
-    });
+    env.ledger().set_timestamp(end_time);
     auction.close_auction(settlement_id);
 }
 

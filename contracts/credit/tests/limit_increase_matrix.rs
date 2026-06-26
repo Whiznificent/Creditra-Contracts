@@ -11,8 +11,8 @@
 
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
+use creditra_credit::types::{ContractError, CreditStatus};
 use creditra_credit::{Credit, CreditClient};
-use creditra_credit::types::ContractError;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -49,7 +49,7 @@ fn open_line_and_draw(
     client.open_credit_line(borrower, &initial_limit, &rate_bps, &risk_score);
     client.draw_credit(borrower, &draw);
 
-    let line = client.get_credit_line(borrower);
+    let line = client.get_credit_line(borrower).unwrap();
     assert_eq!(line.credit_limit, initial_limit);
     assert_eq!(line.utilized_amount, draw);
 }
@@ -74,11 +74,11 @@ fn test_limit_increase_matrix_success_in_range() {
 
     client.update_risk_parameters(&borrower, &new_limit, &new_rate_bps, &new_risk_score);
 
-    let line = client.get_credit_line(&borrower);
+    let line = client.get_credit_line(&borrower).unwrap();
     assert_eq!(line.credit_limit, new_limit);
     assert_eq!(line.utilized_amount, utilized);
     // When limit >= utilized, the line should be Active.
-    assert_eq!(line.status.to_u32(), 0, "Expected Active when limit >= utilized");
+    assert_eq!(line.status, CreditStatus::Active, "Expected Active when limit >= utilized");
 
     let _ = env; // silence unused warning in older toolchains
 }

@@ -236,8 +236,8 @@ proptest! {
         client.open_credit_line(&borrower, &10_000_i128, &500_u32, &10_u32);
 
         let mut ts: u64 = 1_000;
-        let mut prev_accrual_ts = client.get_credit_line(&borrower).last_accrual_ts;
-        let mut prev_rate_ts = client.get_credit_line(&borrower).last_rate_update_ts;
+        let mut prev_accrual_ts = client.get_credit_line(&borrower).unwrap().last_accrual_ts;
+        let mut prev_rate_ts = client.get_credit_line(&borrower).unwrap().last_rate_update_ts;
         let mut is_suspended = false;
 
         for (op, delta) in ops.iter().zip(deltas.iter().cycle()) {
@@ -270,7 +270,7 @@ proptest! {
                 }
             }
 
-            let line = client.get_credit_line(&borrower);
+            let line = client.get_credit_line(&borrower).unwrap();
 
             prop_assert!(
                 line.last_accrual_ts >= prev_accrual_ts,
