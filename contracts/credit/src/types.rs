@@ -346,16 +346,17 @@ pub struct RateFormulaConfigEvent {
 
 /// Global protocol configuration.
 ///
-/// This is **not** a `#[contracttype]` — it never crosses the host boundary.
-/// It is a Rust-side projection of the instance-storage keys
+/// A projection of the instance-storage keys
 /// [`crate::storage::DataKey::LiquidityToken`] and
-/// [`crate::storage::DataKey::LiquiditySource`], used by helpers that want to
-/// inspect both values together (e.g. during the draw pre-flight check).
+/// [`crate::storage::DataKey::LiquiditySource`], returned by
+/// `get_protocol_config` for integrators who need to inspect both
+/// values in a single call.
 ///
 /// Either field may be `None` if the corresponding key has not been set; in
 /// that case the relevant entrypoints panic with
 /// [`ContractError::MissingLiquidityToken`] or
 /// [`ContractError::MissingLiquiditySource`].
+#[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolConfig {
     /// Configured liquidity token.
@@ -366,9 +367,8 @@ pub struct ProtocolConfig {
 
 /// Global protocol aggregate balances.
 ///
-/// This is **not** a `#[contracttype]`; it is a Rust-side projection used by
-/// `get_protocol_summary` to return dashboard totals from existing aggregate
-/// storage without bumping persistent-entry TTL.
+/// Returned by `get_protocol_summary` as a Soroban ABI value.
+#[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolSummary {
     /// Number of indexed credit lines.
