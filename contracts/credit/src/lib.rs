@@ -89,6 +89,10 @@
 //! See [`docs/PROTOCOL_SPEC.md`](../../../docs/PROTOCOL_SPEC.md) for the
 //! per-entrypoint contract surface and
 //! [`docs/SECURITY.md`](../../../docs/SECURITY.md) for the threat model.
+//!
+//! Host-side per-entrypoint CPU/memory sampling for gas-regression baselines
+//! lives in [`instrument`] (requires the `instrument` Cargo feature; not
+//! compiled into WASM).
 
 mod accrual;
 #[cfg(test)]
@@ -101,6 +105,8 @@ mod collateral;
 mod config;
 pub mod events;
 mod freeze;
+#[cfg(all(not(target_arch = "wasm32"), feature = "instrument"))]
+pub mod instrument;
 mod lifecycle;
 pub mod math_utils;
 mod query;

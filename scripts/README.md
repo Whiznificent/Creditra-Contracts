@@ -12,6 +12,8 @@ they are operator-facing utilities only.
 | `clean_profraw.sh` | Remove stray `*.profraw` coverage files left over by `cargo llvm-cov`. |
 | `check_workspace.sh` | Convenience wrapper around `cargo check --workspace`. |
 | `list_contract_errors.py` | Print every `ContractError` variant declared in `contracts/credit/src/types.rs` with its discriminant. |
+| `gas-regression.sh` | Run per-entrypoint budget regression tests (or regenerate baselines with `--regen`). |
+| `regen_budget_baseline.sh` | Regenerate `contracts/credit/test_snapshots/budget.json` via the `budget_baseline` example. |
 
 ## Conventions
 
