@@ -91,6 +91,8 @@ mod tests {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         ); // start 0, end 1000, min 50, 0 bps
 
         client.place_bid(&auction_id, &alice, &100_i128);
@@ -122,6 +124,8 @@ mod tests {
             &1000,
             &50_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -169,6 +173,8 @@ mod tests {
             &u64::MAX,
             &1_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         ); // long auction, min 1, 0 bps
@@ -259,6 +265,8 @@ mod tests {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
 
         for _ in 0..FUZZ_STEPS {
@@ -328,6 +336,8 @@ mod tests {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
 
         let mut seed: u64 = 0xdeadbeef_cafe_beef;
@@ -383,6 +393,8 @@ mod tests {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
         client.init_auction(
             &auction_id,
@@ -391,6 +403,8 @@ mod tests {
             &1000,
             &50_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -428,6 +442,8 @@ mod tests {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
         client.init_auction(
             &auction_id,
@@ -436,6 +452,8 @@ mod tests {
             &1000,
             &50_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -476,6 +494,8 @@ mod tests {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
         client.close_auction(&auction_id);
         client.settle_default_liquidation(&auction_id, &credit_contract, &borrower);
@@ -514,6 +534,8 @@ mod tests {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
         client.init_auction(
             &auction_id,
@@ -522,6 +544,8 @@ mod tests {
             &1000,
             &50_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -555,6 +579,8 @@ mod tests {
             &1000,
             &50_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -597,6 +623,8 @@ mod tests {
             &1000,
             &50_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -645,6 +673,8 @@ mod tests {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
 
         let attempt = client.try_place_bid(&auction_id, &bidder, &100_i128);
@@ -671,6 +701,8 @@ mod tests {
             &1000,
             &50_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -708,6 +740,8 @@ mod tests {
             &1000,
             &50_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -756,6 +790,8 @@ mod tests {
             &1000,
             &50_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -809,6 +845,8 @@ mod tests {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
         // 10_000 bps (100% increment) is the maximum valid value
         client.init_auction(
@@ -818,6 +856,8 @@ mod tests {
             &1000,
             &1_i128,
             &10_000_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -844,6 +884,8 @@ mod tests {
             &u64::MAX,
             &1_i128,
             &100_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -886,6 +928,8 @@ mod tests {
             &100_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
         client.place_bid(&auction_id, &alice, &1_000_i128);
         client.place_bid(&auction_id, &bob, &1_010_i128); // exactly at threshold
@@ -917,6 +961,8 @@ mod tests {
             &u64::MAX,
             &1_i128,
             &333_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -956,6 +1002,8 @@ mod tests {
             &u64::MAX,
             &1_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -998,6 +1046,8 @@ mod tests {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
         client.place_bid(&auction_id, &winner, &100_i128);
         client.close_auction(&auction_id);
@@ -1028,6 +1078,8 @@ mod tests {
             &u64::MAX,
             &1_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -1068,6 +1120,8 @@ mod tests {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
         client.place_bid(&auction_id, &winner, &100_i128);
         // not closing the auction
@@ -1097,6 +1151,8 @@ mod tests {
             &u64::MAX,
             &1_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -1132,6 +1188,8 @@ mod tests {
             &0_u32,
             &Some(500_i128),
             &Some(100_i128),
+            &None,
+            &None,
         );
 
         env.ledger().with_mut(|li| li.timestamp = 1000);
@@ -1167,6 +1225,8 @@ mod tests {
             &0_u32,
             &Some(500_i128),
             &Some(100_i128),
+            &None,
+            &None,
         );
 
         env.ledger().with_mut(|li| li.timestamp = 1500);
@@ -1202,6 +1262,8 @@ mod tests {
             &0_u32,
             &Some(500_i128),
             &Some(100_i128),
+            &None,
+            &None,
         );
 
         env.ledger().with_mut(|li| li.timestamp = 2000);
@@ -1237,6 +1299,8 @@ mod tests {
             &0_u32,
             &Some(500_i128),
             &Some(100_i128),
+            &None,
+            &None,
         );
 
         env.ledger().with_mut(|li| li.timestamp = 1500);
@@ -1266,6 +1330,8 @@ mod tests {
             &0_u32,
             &Some(500_i128),
             &Some(100_i128),
+            &None,
+            &None,
         );
 
         env.ledger().with_mut(|li| li.timestamp = 1500);
@@ -1281,39 +1347,159 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_dutch_price_happy_paths() {
+    fn test_compute_dutch_price_linear_happy_paths() {
         // start_price = 1000, floor_price = 500, duration = 100
         // elapsed = 0 -> should be 1000
-        assert_eq!(super::super::compute_dutch_price(1000, 500, 0, 100), 1000);
+        assert_eq!(
+            super::super::compute_dutch_price(1000, 500, 0, 100, &DutchAuctionDecay::Linear, None,),
+            1000
+        );
 
         // elapsed = 50 -> mid point -> should be 750
-        assert_eq!(super::super::compute_dutch_price(1000, 500, 50, 100), 750);
+        assert_eq!(
+            super::super::compute_dutch_price(1000, 500, 50, 100, &DutchAuctionDecay::Linear, None,),
+            750
+        );
 
         // elapsed = 25 -> quarter point -> 1000 - (500 * 25) / 100 = 875
-        assert_eq!(super::super::compute_dutch_price(1000, 500, 25, 100), 875);
+        assert_eq!(
+            super::super::compute_dutch_price(1000, 500, 25, 100, &DutchAuctionDecay::Linear, None,),
+            875
+        );
 
         // elapsed = 75 -> three-quarters point -> 1000 - (500 * 75) / 100 = 625
-        assert_eq!(super::super::compute_dutch_price(1000, 500, 75, 100), 625);
+        assert_eq!(
+            super::super::compute_dutch_price(1000, 500, 75, 100, &DutchAuctionDecay::Linear, None,),
+            625
+        );
 
         // start_price == floor_price -> should always return start_price
-        assert_eq!(super::super::compute_dutch_price(1000, 1000, 50, 100), 1000);
+        assert_eq!(
+            super::super::compute_dutch_price(
+                1000,
+                1000,
+                50,
+                100,
+                &DutchAuctionDecay::Linear,
+                None,
+            ),
+            1000
+        );
+    }
+
+    #[test]
+    fn test_compute_dutch_price_stepped_happy_paths() {
+        // 5 equal steps over duration 100 => price changes every 20 time units.
+        assert_eq!(
+            super::super::compute_dutch_price(
+                1000,
+                500,
+                0,
+                100,
+                &DutchAuctionDecay::Stepped,
+                Some(5),
+            ),
+            1000
+        );
+        assert_eq!(
+            super::super::compute_dutch_price(
+                1000,
+                500,
+                19,
+                100,
+                &DutchAuctionDecay::Stepped,
+                Some(5),
+            ),
+            1000
+        );
+        assert_eq!(
+            super::super::compute_dutch_price(
+                1000,
+                500,
+                20,
+                100,
+                &DutchAuctionDecay::Stepped,
+                Some(5),
+            ),
+            900
+        );
+        assert_eq!(
+            super::super::compute_dutch_price(
+                1000,
+                500,
+                40,
+                100,
+                &DutchAuctionDecay::Stepped,
+                Some(5),
+            ),
+            800
+        );
+        assert_eq!(
+            super::super::compute_dutch_price(
+                1000,
+                500,
+                99,
+                100,
+                &DutchAuctionDecay::Stepped,
+                Some(5),
+            ),
+            600
+        );
     }
 
     #[test]
     fn test_compute_dutch_price_edge_cases() {
         // duration = 0 -> returns floor_price immediately
-        assert_eq!(super::super::compute_dutch_price(1000, 500, 50, 0), 500);
+        assert_eq!(
+            super::super::compute_dutch_price(1000, 500, 50, 0, &DutchAuctionDecay::Linear, None,),
+            500
+        );
 
         // elapsed_time >= duration -> returns floor_price
-        assert_eq!(super::super::compute_dutch_price(1000, 500, 100, 100), 500);
-        assert_eq!(super::super::compute_dutch_price(1000, 500, 150, 100), 500);
+        assert_eq!(
+            super::super::compute_dutch_price(
+                1000,
+                500,
+                100,
+                100,
+                &DutchAuctionDecay::Linear,
+                None,
+            ),
+            500
+        );
+        assert_eq!(
+            super::super::compute_dutch_price(
+                1000,
+                500,
+                150,
+                100,
+                &DutchAuctionDecay::Stepped,
+                Some(5),
+            ),
+            500
+        );
     }
 
     #[test]
     fn test_compute_dutch_price_invalid_inputs_panic() {
         // start_price < floor_price -> panic
         let result = catch_unwind(AssertUnwindSafe(|| {
-            super::super::compute_dutch_price(500, 1000, 50, 100);
+            super::super::compute_dutch_price(500, 1000, 50, 100, &DutchAuctionDecay::Linear, None);
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_compute_dutch_price_missing_step_count_panics() {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            super::super::compute_dutch_price(
+                1000,
+                500,
+                50,
+                100,
+                &DutchAuctionDecay::Stepped,
+                None,
+            );
         }));
         assert!(result.is_err());
     }
@@ -1322,9 +1508,107 @@ mod tests {
     fn test_compute_dutch_price_overflow_panics() {
         // (i128::MAX * 2) overflows, which should panic
         let result = catch_unwind(AssertUnwindSafe(|| {
-            super::super::compute_dutch_price(i128::MAX, 0, 2, 100);
+            super::super::compute_dutch_price(
+                i128::MAX,
+                0,
+                2,
+                100,
+                &DutchAuctionDecay::Linear,
+                None,
+            );
         }));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn init_auction_rejects_stepped_decay_without_step_count() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(Auction, ());
+        let client = AuctionClient::new(&env, &contract_id);
+        let auction_id = Symbol::new(&env, "dutch_step_missing");
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            client.init_auction(
+                &auction_id,
+                &AuctionMode::Dutch,
+                &1000,
+                &2000,
+                &50_i128,
+                &0_u32,
+                &Some(500_i128),
+                &Some(100_i128),
+                &Some(DutchAuctionDecay::Stepped),
+                &None,
+            );
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn init_auction_rejects_zero_step_count_for_stepped_decay() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(Auction, ());
+        let client = AuctionClient::new(&env, &contract_id);
+        let auction_id = Symbol::new(&env, "dutch_step_zero");
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            client.init_auction(
+                &auction_id,
+                &AuctionMode::Dutch,
+                &1000,
+                &2000,
+                &50_i128,
+                &0_u32,
+                &Some(500_i128),
+                &Some(100_i128),
+                &Some(DutchAuctionDecay::Stepped),
+                &Some(0_u32),
+            );
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn dutch_auction_stepped_decay_enforces_bucket_price() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let alice = Address::generate(&env);
+        let bob = Address::generate(&env);
+
+        let contract_id = env.register(Auction, ());
+        let client = AuctionClient::new(&env, &contract_id);
+        let auction_id = Symbol::new(&env, "dutch_step_bid");
+
+        client.init_auction(
+            &auction_id,
+            &AuctionMode::Dutch,
+            &1000,
+            &2000,
+            &50_i128,
+            &0_u32,
+            &Some(500_i128),
+            &Some(100_i128),
+            &Some(DutchAuctionDecay::Stepped),
+            &Some(4_u32),
+        );
+
+        env.ledger().with_mut(|li| li.timestamp = 1499);
+        let low = client.try_place_bid(&auction_id, &alice, &399_i128);
+        assert!(low.is_err(), "bucket price of 400 must reject 399");
+
+        client.place_bid(&auction_id, &bob, &400_i128);
+
+        let stored: crate::types::AuctionState = env
+            .as_contract(&contract_id, || env.storage().persistent().get(&auction_id))
+            .unwrap();
+        assert_eq!(stored.status, AuctionStatus::Closed);
+        assert_eq!(stored.highest_bidder.unwrap(), bob);
+        assert_eq!(stored.highest_bid, 400_i128);
     }
 
     #[test]
@@ -1347,6 +1631,8 @@ mod tests {
             &1000,
             &50_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -1440,6 +1726,8 @@ mod reentrancy_exploration {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
 
         // Alice is the current highest bidder
@@ -1529,6 +1817,8 @@ mod reentrancy_exploration {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
         client.place_bid(&auction_id, &winner, &100_i128);
         client.close_auction(&auction_id);
@@ -1574,6 +1864,8 @@ mod reentrancy_exploration {
             &u64::MAX,
             &1_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -1637,6 +1929,8 @@ mod reentrancy_preservation {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
 
         // Vary first-bid amounts using a deterministic sequence
@@ -1696,6 +1990,8 @@ mod reentrancy_preservation {
             &0_u32,
             &Some(500_i128),
             &Some(100_i128),
+            &None,
+            &None,
         );
 
         env.ledger().with_mut(|li| li.timestamp = 1500);
@@ -1742,6 +2038,8 @@ mod reentrancy_preservation {
             &0_u32,
             &None,
             &None,
+            &None,
+            &None,
         );
         client.place_bid(&auction_id, &alice, &100_i128);
 
@@ -1770,6 +2068,8 @@ mod reentrancy_preservation {
             &u64::MAX,
             &1_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );
@@ -1803,6 +2103,8 @@ mod reentrancy_preservation {
             &1000,
             &50_i128,
             &0_u32,
+            &None,
+            &None,
             &None,
             &None,
         );

@@ -7,6 +7,7 @@
 //! - [`AuctionMode`] — English (ascending) or Dutch (descending) bid model.
 //! - [`AuctionStatus`] — Open → Closed → Claimed terminal lifecycle.
 //! - [`AuctionConfig`] — immutable per-auction parameters set at init.
+//! - [`DutchAuctionDecay`] — Dutch price-curve shape (linear or stepped).
 //! - [`AuctionState`] — mutable bid state (highest bidder & bid amount).
 //! - [`Bid`] — single-bid record (currently informational, not persisted
 //!   per-bid).
@@ -61,6 +62,15 @@ pub enum AuctionStatus {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DutchAuctionDecay {
+    /// Continuous linear interpolation from start price to floor price.
+    Linear,
+    /// Piecewise-constant staircase decay with `dutch_step_count` equal drops.
+    Stepped,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
     Status,
     HighestBidder,
@@ -98,6 +108,11 @@ pub struct AuctionConfig {
     pub dutch_start_price: Option<i128>,
     /// Floor price for Dutch auction (only used in Dutch mode)
     pub dutch_floor_price: Option<i128>,
+    /// Dutch decay shape. `None` defaults to [`DutchAuctionDecay::Linear`].
+    pub dutch_decay: Option<DutchAuctionDecay>,
+    /// Number of equal time buckets used by [`DutchAuctionDecay::Stepped`].
+    /// Required for stepped Dutch auctions and ignored for linear ones.
+    pub dutch_step_count: Option<u32>,
 }
 
 #[contracttype]

@@ -155,6 +155,8 @@ fn setup_auction(from: AuctionStatus) -> (Env, Address, Symbol, Address) {
         &0_u32,
         &None,
         &None,
+        &None,
+        &None,
     );
 
     match from {

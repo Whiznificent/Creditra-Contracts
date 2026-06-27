@@ -463,13 +463,18 @@ active in the live `place_bid` path; tracked as a known gap.
 ### 6.3 Dutch auction
 
 `AuctionMode::Dutch` with init params `dutch_start_price = p_0`,
-`dutch_floor_price = p_f`. The price curve is **linear decay**
-(implementation `compute_dutch_price`,
-`gateway-contract/.../lib.rs`):
+`dutch_floor_price = p_f`, plus optional `dutch_decay` and
+`dutch_step_count`.
+
+- `dutch_decay = Linear` (or omitted) keeps the original linear decay:
 
 $$
 p(t) = p_0 - (p_0 - p_f) \cdot \frac{\min(t, T)}{T}, \quad T = \text{end\_time} - \text{start\_time}
 $$
+
+- `dutch_decay = Stepped` splits the same total drop into
+  `dutch_step_count` equal time buckets and reprices only at bucket
+  boundaries. `dutch_step_count` is required and must be greater than zero.
 
 A bid $a$ qualifies if $a \geq p(t) \land a \geq \text{min\_bid}$. The first
 qualifying bid atomically flips the auction to `Closed` and records the
@@ -602,7 +607,7 @@ Key differences:
 | Fee accounting (protocol fee) | `tests/protocol_fee.rs` |
 | Default → auction → settle flow | `tests/credit_auction_e2e.rs` |
 | Settlement replay protection | `tests/default_liquidation_settled_event.rs` |
-| Dutch auction curve | `gateway-contract/.../test.rs` |
+| Dutch auction curves (linear + stepped) | `gateway-contract/.../test.rs` |
 | Anti-snipe (open gap) | not currently tested in live path |
 
 ---
