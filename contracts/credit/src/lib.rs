@@ -117,12 +117,12 @@ mod risk_formula_tests;
 use crate::auth::require_admin_auth;
 use crate::events::{
     publish_admin_rotation_accepted, publish_admin_rotation_proposed,
-    publish_borrower_blocked_event, publish_contract_upgraded_event, publish_credit_line_event,
-    publish_draw_reversed_event, publish_drawn_event, publish_interest_accrued_event,
-    publish_oracle_config_set_event, publish_oracle_price_accepted_event,
-    publish_rate_formula_config_event, publish_repayment_event, publish_token_rescued_event,
-    ContractUpgradedEvent, CreditLineEvent, DrawReversedEvent, DrawnEvent, InterestAccruedEvent,
-    RepaymentEvent,
+    publish_borrower_blocked_event, publish_close_factor_bps_set_event,
+    publish_contract_upgraded_event, publish_credit_line_event, publish_draw_reversed_event,
+    publish_drawn_event, publish_interest_accrued_event, publish_oracle_config_set_event,
+    publish_oracle_price_accepted_event, publish_rate_formula_config_event,
+    publish_repayment_event, publish_token_rescued_event, ContractUpgradedEvent, CreditLineEvent,
+    DrawReversedEvent, DrawnEvent, InterestAccruedEvent, RepaymentEvent,
 };
 use crate::math_utils::{compute_deviation_bps, mul_div, Rounding};
 use crate::storage::{
@@ -1259,6 +1259,40 @@ impl Credit {
     /// Return the configured auction contract address, if set.
     pub fn get_auction_contract(env: Env) -> Option<Address> {
         crate::storage::get_auction_contract(&env)
+    }
+
+    // ── Close factor (partial liquidation cap) ────────────────────────────────
+
+    /// Set the protocol-level max close factor in basis points (admin only).
+    ///
+    /// This caps the `close_factor_bps` parameter accepted by
+    /// `settle_default_liquidation`. When set to e.g. `5_000`, no single
+    /// settlement can recover more than 50% of the outstanding debt, even
+    /// if the caller supplies a higher value. Defaults to `10_000` (full
+    /// liquidation) when never configured.
+    ///
+    /// # Validation
+    /// - `close_factor_bps` must be in `1..=10_000`.
+    ///
+    /// # Authorization
+    /// Admin only.
+    ///
+    /// # Events
+    /// Emits a `clsfctr` event with the new value.
+    pub fn set_close_factor_bps(env: Env, close_factor_bps: u32) {
+        require_admin_auth(&env);
+        if close_factor_bps == 0 || close_factor_bps > 10_000 {
+            env.panic_with_error(ContractError::InvalidAmount);
+        }
+        crate::storage::set_close_factor_bps(&env, close_factor_bps);
+        publish_close_factor_bps_set_event(&env, close_factor_bps);
+    }
+
+    /// Return the current protocol-level max close factor in basis points.
+    ///
+    /// Returns `10_000` if never configured by the admin.
+    pub fn get_close_factor_bps(env: Env) -> u32 {
+        crate::storage::get_close_factor_bps(&env)
     }
 
     // ── Oracle circuit-breaker admin ──────────────────────────────────────────

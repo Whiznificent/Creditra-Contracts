@@ -403,6 +403,13 @@ pub fn publish_contract_upgraded_event(env: &Env, event: ContractUpgradedEvent) 
     );
 }
 
+pub fn publish_close_factor_bps_set_event(env: &Env, close_factor_bps: u32) {
+    env.events().publish(
+        (symbol_short!("credit"), Symbol::new(env, "clsfctr")),
+        close_factor_bps,
+    );
+}
+
 pub fn publish_oracle_config_set_event(env: &Env, max_deviation_bps: u32, max_age_seconds: u64) {
     env.events().publish(
         (symbol_short!("credit"), Symbol::new(env, "orc_cfg")),

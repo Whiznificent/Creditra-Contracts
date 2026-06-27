@@ -703,6 +703,11 @@ pub fn settle_default_liquidation(
         env.panic_with_error(ContractError::InvalidAmount);
     }
 
+    let max_close_factor = crate::storage::get_close_factor_bps(&env);
+    if close_factor_bps > max_close_factor {
+        env.panic_with_error(ContractError::CloseFactorAboveMax);
+    }
+
     let settlement_key = liquidation_settlement_key(&borrower, &settlement_id);
     if env.storage().persistent().has(&settlement_key) {
         env.panic_with_error(ContractError::AlreadyInitialized);

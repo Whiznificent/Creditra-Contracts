@@ -162,6 +162,11 @@ pub enum DataKey {
     OracleLastPriceTs,
     /// Global sum of every borrower's collateral balance.
     TotalCollateral,
+    /// Max close factor in basis points for default-liquidation settlement.
+    /// When set, `settle_default_liquidation` caps the caller-supplied
+    /// `close_factor_bps` to this value. Defaults to 10_000 (full recovery)
+    /// when absent.
+    CloseFactorBps,
 }
 
 /// Maximum number of credit lines returned per page.
@@ -655,6 +660,26 @@ pub fn set_auction_contract(env: &Env, addr: &Address) {
     env.storage()
         .instance()
         .set(&DataKey::AuctionContract, addr);
+}
+
+// ── Close factor (partial liquidation cap) ─────────────────────────────────────
+
+/// Return the protocol-level max close factor in basis points.
+/// Defaults to 10_000 (full liquidation allowed) when not set.
+pub fn get_close_factor_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::CloseFactorBps)
+        .unwrap_or(10_000)
+}
+
+/// Set the protocol-level max close factor in basis points (admin only).
+/// Supply `10_000` for full-liquidation-only (no partial), or any value
+/// `1..=10_000` to cap partial settlements.
+pub fn set_close_factor_bps(env: &Env, bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::CloseFactorBps, &bps);
 }
 
 /// Return the installment schedule for a borrower, if configured.
