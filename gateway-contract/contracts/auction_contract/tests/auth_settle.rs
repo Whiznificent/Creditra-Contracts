@@ -52,6 +52,8 @@ fn setup_auction() -> (Env, Address, Symbol, Address, Address, i128) {
         &0_u32,
         &None,
         &None,
+        &None,
+        &None,
     );
     client.place_bid(&auction_id, &bidder, &420_i128);
     client.close_auction(&auction_id);
@@ -74,12 +76,7 @@ fn non_factory_invoker_reverts() {
             invoke: &MockAuthInvoke {
                 contract: &contract_id,
                 fn_name: "settle_default_liquidation",
-                args: (
-                    auction_id.clone(),
-                    factory.clone(),
-                    borrower.clone(),
-                )
-                    .into_val(&env),
+                args: (auction_id.clone(), factory.clone(), borrower.clone()).into_val(&env),
                 sub_invokes: &[],
             },
         }])
@@ -104,12 +101,7 @@ fn factory_invoker_succeeds() {
             invoke: &MockAuthInvoke {
                 contract: &contract_id,
                 fn_name: "settle_default_liquidation",
-                args: (
-                    auction_id.clone(),
-                    factory.clone(),
-                    borrower.clone(),
-                )
-                    .into_val(&env),
+                args: (auction_id.clone(), factory.clone(), borrower.clone()).into_val(&env),
                 sub_invokes: &[],
             },
         }])
@@ -134,12 +126,7 @@ fn replay_settle_reverts() {
             invoke: &MockAuthInvoke {
                 contract: &contract_id,
                 fn_name: "settle_default_liquidation",
-                args: (
-                    auction_id.clone(),
-                    factory.clone(),
-                    borrower.clone(),
-                )
-                    .into_val(&env),
+                args: (auction_id.clone(), factory.clone(), borrower.clone()).into_val(&env),
                 sub_invokes: &[],
             },
         }])
@@ -153,12 +140,7 @@ fn replay_settle_reverts() {
             invoke: &MockAuthInvoke {
                 contract: &contract_id,
                 fn_name: "settle_default_liquidation",
-                args: (
-                    auction_id.clone(),
-                    factory.clone(),
-                    borrower.clone(),
-                )
-                    .into_val(&env),
+                args: (auction_id.clone(), factory.clone(), borrower.clone()).into_val(&env),
                 sub_invokes: &[],
             },
         }])

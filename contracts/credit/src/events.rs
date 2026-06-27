@@ -130,6 +130,19 @@ pub struct DrawReversedEvent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DrawsFrozenEvent {
     pub frozen: bool,
+    pub reason: crate::types::FreezeReason,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreditLineFreezeEvent {
+    pub borrower: soroban_sdk::Address,
+    /// Structured reason for the freeze action.
+    pub reason: crate::types::FreezeReason,
+    /// `true` when frozen; `false` when unfrozen.
+    pub frozen: bool,
+    /// Ledger sequence at time of change (for off-chain indexers).
+    pub ledger: u32,
 }
 
 #[contracttype]
@@ -167,8 +180,14 @@ pub struct DrawnEventV2 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FeeAccruedEvent {
     pub borrower: Address,
+    /// Total protocol fee skimmed from the repayment.
     pub fee_amount: i128,
+    /// Treasury portion of `fee_amount` credited to `TreasuryBalance`.
+    pub treasury_amount: i128,
+    /// Bounty pool portion of `fee_amount` credited to `BountyBalance`.
+    pub bounty_amount: i128,
     pub new_treasury_balance: i128,
+    pub new_bounty_balance: i128,
 }
 
 #[contracttype]
@@ -270,10 +289,28 @@ pub fn publish_interest_accrued_event(env: &Env, event: InterestAccruedEvent) {
         .publish((symbol_short!("credit"), symbol_short!("accrue")), event);
 }
 
-pub fn publish_draws_frozen_event(env: &Env, frozen: bool) {
+pub fn publish_draws_frozen_event(env: &Env, frozen: bool, reason: crate::types::FreezeReason) {
     env.events().publish(
         (symbol_short!("credit"), Symbol::new(env, "drw_freeze")),
-        DrawsFrozenEvent { frozen },
+        DrawsFrozenEvent { frozen, reason },
+    );
+}
+
+/// Publish a per-credit-line freeze/unfreeze event.
+pub fn publish_credit_line_freeze_event(
+    env: &Env,
+    borrower: &soroban_sdk::Address,
+    reason: crate::types::FreezeReason,
+    frozen: bool,
+) {
+    env.events().publish(
+        (symbol_short!("credit"), Symbol::new(env, "line_frz")),
+        CreditLineFreezeEvent {
+            borrower: borrower.clone(),
+            reason,
+            frozen,
+            ledger: env.ledger().sequence(),
+        },
     );
 }
 
@@ -431,6 +468,13 @@ pub fn publish_contract_upgraded_event(env: &Env, event: ContractUpgradedEvent) 
     env.events().publish(
         (symbol_short!("credit"), Symbol::new(env, "upgraded")),
         event,
+    );
+}
+
+pub fn publish_close_factor_bps_set_event(env: &Env, close_factor_bps: u32) {
+    env.events().publish(
+        (symbol_short!("credit"), Symbol::new(env, "clsfctr")),
+        close_factor_bps,
     );
 }
 
