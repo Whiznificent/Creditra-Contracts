@@ -4,7 +4,7 @@ use creditra_credit::events::{
     publish_admin_rotation_accepted, publish_admin_rotation_proposed,
     publish_borrower_blocked_event, publish_default_liquidation_settled_event,
     publish_draw_reversed_event, publish_drawn_event, publish_draws_frozen_event,
-    publish_grace_waiver_applied_event, publish_interest_accrued_event, publish_paused_event,
+    publish_grace_waiver_applied_event, publish_interest_accrued_event,
     publish_rate_formula_config_event, publish_repayment_event, publish_risk_parameters_updated,
     AdminRotationAcceptedEvent, AdminRotationProposedEvent, DefaultLiquidationSettledEvent,
     DrawReversedEvent, InterestAccruedEvent, RepaymentEvent, RiskParametersUpdatedEvent,
@@ -26,9 +26,8 @@ fn setup(env: &Env) -> (CreditClient, Address) {
 #[test]
 fn test_event_topics_stability() {
     let env = Env::default();
-    let (client, admin) = setup(&env);
+    let (_client, admin) = setup(&env);
     let borrower = Address::generate(&env);
-    let recipient = Address::generate(&env);
 
     // Trigger all events
     publish_drawn_event(
@@ -63,6 +62,7 @@ fn test_event_topics_stability() {
             recovered_amount: 20,
             remaining_utilized_amount: 35,
             status: CreditStatus::Active,
+            close_factor_bps: 0,
         },
     );
     publish_admin_rotation_proposed(&env, &admin, 100);
@@ -100,8 +100,14 @@ fn test_event_topics_stability() {
         let t0 = topics.get(0).unwrap();
         let t1 = topics.get(1).unwrap();
 
-        assert_eq!(t0, symbol_short!("credit"));
-        assert_eq!(t1, Symbol::new(&env, expected_t1));
+        assert_eq!(
+            Symbol::try_from_val(&env, &t0).unwrap(),
+            symbol_short!("credit")
+        );
+        assert_eq!(
+            Symbol::try_from_val(&env, &t1).unwrap(),
+            Symbol::new(&env, expected_t1)
+        );
     };
 
     assert_topic(0, "credit", "drawn");
