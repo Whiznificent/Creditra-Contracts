@@ -171,6 +171,9 @@ pub enum DataKey {
     OracleLastPriceTs,
     /// Global sum of every borrower's collateral balance.
     TotalCollateral,
+    /// Structured reason for the most recent protocol pause (escape-hatch audit trail).
+    /// Stored when admin invokes pause with a reason; cleared on unpause.
+    PauseReason,
 }
 
 /// Maximum number of credit lines returned per page.
@@ -795,6 +798,28 @@ pub fn is_paused(env: &Env) -> bool {
 /// - **TTL Note**: Shares instance TTL — extend alongside other instance keys.
 pub fn set_paused(env: &Env, paused: bool) {
     env.storage().instance().set(&paused_key(env), &paused);
+    if !paused {
+        // Clear the pause reason when unpausing.
+        env.storage().instance().remove(&DataKey::PauseReason);
+    }
+}
+
+/// Get the structured pause reason, if one was recorded during the last pause.
+///
+/// Returns `None` when no pause reason was set (e.g., before any pause or
+/// if the admin used the reason-less `set_protocol_paused(bool)`).
+pub fn get_pause_reason(env: &Env) -> Option<crate::types::PauseReason> {
+    env.storage().instance().get(&DataKey::PauseReason)
+}
+
+/// Store a structured pause reason alongside the pause flag.
+///
+/// Should be called by the entrypoint that sets the pause flag, so the reason
+/// and the flag are written atomically within the same host transaction.
+pub fn set_pause_reason(env: &Env, reason: &crate::types::PauseReason) {
+    env.storage()
+        .instance()
+        .set(&DataKey::PauseReason, reason);
 }
 
 /// Assert the protocol is not paused. Reverts with ContractError::Paused if paused.
