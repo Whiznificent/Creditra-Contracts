@@ -148,7 +148,7 @@ pub fn verify_vrf_commitment(env: &Env, borrower: &Address, risk_score: u32) -> 
 /// ```
 fn derive_score_from_hash(hash: &BytesN<32>) -> u32 {
     let mut sum: u32 = 0;
-    for i in 0..32 {
+    for i in 0u32..32 {
         let byte = hash.get(i);
         if let Some(b) = byte {
             sum = sum.saturating_add(b as u32);
