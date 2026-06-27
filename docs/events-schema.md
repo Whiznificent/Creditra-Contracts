@@ -45,7 +45,7 @@ Topics use `symbol_short!` (≤ 9 chars) to use cheap `SCV_SYMBOL` on-chain enco
 | ("credit","drawn_v2") | DrawnEventV2 | 1. borrower: Address, 2. recipient: Address, 3. reserve_source: Address, 4. amount: i128, 5. new_utilized_amount: i128, 6. timestamp: u64 | 1.0.0 | -
 | ("credit","repay") | RepaymentEvent | 1. borrower: Address, 2. amount: i128, 3. new_utilized_amount: i128 | 1.0.0 | -
 | ("credit","accrue") | InterestAccruedEvent | 1. borrower: Address, 2. accrued_amount: i128, 3. new_utilized_amount: i128 | 1.0.0 | -
-| ("credit","fee_accrd") | FeeAccruedEvent | 1. borrower: Address, 2. fee_amount: i128, 3. new_treasury_balance: i128 | 1.0.0 | -
+| ("credit","fee_accrd") | FeeAccruedEvent | 1. borrower: Address, 2. fee_amount: i128, 3. treasury_amount: i128, 4. bounty_amount: i128, 5. new_treasury_balance: i128, 6. new_bounty_balance: i128 | 1.1.0 | Extended with fee split fields |
 | ("credit","admin_prop") | AdminRotationProposedEvent | 1. proposed_admin: Address, 2. accept_after: u64 | 1.0.0 | -
 | ("credit","admin_acc") | AdminRotationAcceptedEvent | 1. new_admin: Address | 1.0.0 | -
 | ("credit","risk_upd") | RiskParametersUpdatedEvent | 1. borrower: Address, 2. credit_limit: i128, 3. interest_rate_bps: u32, 4. risk_score: u32 | 1.0.0 | -

@@ -24,7 +24,7 @@
 //!   into the configured `LiquidityToken`.
 //! - **Repay** — `repay_credit` is **not pause-gated**: borrowers must always
 //!   be able to deleverage. Interest-first allocation with optional
-//!   protocol-fee-on-interest routed to the treasury accumulator.
+//!   protocol-fee-on-interest split between treasury and bounty accumulators.
 //! - **Risk update** — `update_risk_parameters` either computes the new rate
 //!   from `risk_score` via the piecewise-linear formula (if configured) or
 //!   accepts an admin-supplied rate; both paths are clamped and gated by the
@@ -103,6 +103,7 @@ mod auth;
 mod borrow;
 mod config;
 pub mod events;
+mod fees;
 mod freeze;
 #[cfg(all(not(target_arch = "wasm32"), feature = "instrument"))]
 pub mod instrument;
@@ -488,7 +489,138 @@ impl Credit {
     /// - [`ContractError::CreditLineClosed`] — credit line is closed.
     /// - [`ContractError::RepayExceedsMaxAmount`] — amount exceeds per-tx repay cap.
     pub fn repay_credit(env: Env, borrower: Address, amount: i128) {
-        borrow::repay_credit(env, borrower, amount)
+        // --- Reentrancy guard (defense-in-depth) ---
+        set_reentrancy_guard(&env);
+        borrower.require_auth();
+
+        if amount <= 0 {
+            clear_reentrancy_guard(&env);
+            env.panic_with_error(ContractError::InvalidAmount);
+        }
+
+        // Enforce per-transaction repay cap when configured.
+        if let Some(max_repay) = env
+            .storage()
+            .instance()
+            .get::<DataKey, i128>(&DataKey::MaxRepayAmount)
+        {
+            if amount > max_repay {
+                clear_reentrancy_guard(&env);
+                env.panic_with_error(ContractError::RepayExceedsMaxAmount);
+            }
+        }
+
+        let stored_line: CreditLineData =
+            storage_get_credit_line(&env, &borrower).unwrap_or_else(|| {
+                clear_reentrancy_guard(&env);
+                env.panic_with_error(ContractError::CreditLineNotFound)
+            });
+        let previous_utilized = stored_line.utilized_amount;
+
+        let mut credit_line = accrual::apply_accrual(&env, stored_line);
+
+        if credit_line.status == CreditStatus::Closed {
+            clear_reentrancy_guard(&env);
+            env.panic_with_error(ContractError::CreditLineClosed);
+        }
+
+        let effective_repay = if amount > credit_line.utilized_amount {
+            credit_line.utilized_amount
+        } else {
+            amount
+        };
+
+        let interest_repaid = effective_repay.min(credit_line.accrued_interest);
+        let _principal_repaid = effective_repay - interest_repaid;
+
+        if effective_repay > 0 {
+            let maybe_token: Option<Address> =
+                env.storage().instance().get(&DataKey::LiquidityToken);
+            if let Some(token_address) = maybe_token {
+                let reserve_address: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::LiquiditySource)
+                    .unwrap_or_else(|| env.current_contract_address());
+
+                let token_client = token::Client::new(&env, &token_address);
+                let contract_address = env.current_contract_address();
+
+                // Compute protocol fee only on the interest component.
+                let fee_bps: u32 = crate::storage::get_protocol_fee_bps(&env).unwrap_or(0);
+                let mut fee: i128 = 0;
+                if fee_bps > 0 && interest_repaid > 0 {
+                    fee = crate::math_utils::apply_bps(
+                        interest_repaid as u128,
+                        fee_bps,
+                        Rounding::Floor,
+                    ) as i128;
+                }
+
+                // Transfer fee portion into contract (treasury accumulator), then
+                // transfer remaining amount into the reserve.
+                if fee > 0 {
+                    token_client.transfer_from(
+                        &contract_address,
+                        &borrower,
+                        &contract_address,
+                        &fee,
+                    );
+                    crate::fees::accrue_protocol_fee(&env, &borrower, fee);
+                }
+
+                let reserve_amount = effective_repay.saturating_sub(fee);
+                if reserve_amount > 0 {
+                    token_client.transfer_from(
+                        &contract_address,
+                        &borrower,
+                        &reserve_address,
+                        &reserve_amount,
+                    );
+                }
+            }
+        }
+
+        credit_line.accrued_interest = credit_line
+            .accrued_interest
+            .checked_sub(interest_repaid)
+            .unwrap_or(0);
+
+        let new_utilized = credit_line
+            .utilized_amount
+            .saturating_sub(effective_repay)
+            .max(0);
+        let previous_status = credit_line.status;
+        credit_line.utilized_amount = new_utilized;
+
+        persist_credit_line(
+            &env,
+            &borrower,
+            &credit_line,
+            previous_utilized,
+            Some(previous_status),
+        );
+        lifecycle::advance_repayment_schedule_after_repay(&env, &borrower, effective_repay);
+
+        let _timestamp = env.ledger().timestamp();
+        publish_interest_accrued_event(
+            &env,
+            InterestAccruedEvent {
+                borrower: borrower.clone(),
+                accrued_amount: 0,
+                new_utilized_amount: new_utilized,
+            },
+        );
+        publish_repayment_event(
+            &env,
+            RepaymentEvent {
+                borrower: borrower.clone(),
+                amount: effective_repay,
+                new_utilized_amount: new_utilized,
+            },
+        );
+
+        clear_reentrancy_guard(&env);
     }
 
     pub fn update_risk_parameters(
@@ -748,6 +880,66 @@ impl Credit {
     /// Get configured treasury address, if any.
     pub fn get_treasury(env: Env) -> Option<Address> {
         crate::storage::get_treasury_address(&env)
+    }
+
+    /// Set the treasury share of skimmed protocol fees in basis points (admin only).
+    ///
+    /// `treasury_share_bps` must be in `0..=10_000`. The bounty pool receives the
+    /// remainder of each fee after the treasury portion is floored. When unset,
+    /// the default is `10_000` (100 % treasury, backward compatible).
+    pub fn set_treasury_fee_share_bps(env: Env, treasury_share_bps: u32) {
+        require_admin_auth(&env);
+        if treasury_share_bps > crate::fees::MAX_FEE_SHARE_BPS {
+            env.panic_with_error(crate::types::ContractError::Overflow);
+        }
+        crate::storage::set_treasury_fee_share_bps(&env, treasury_share_bps);
+    }
+
+    /// Get configured treasury fee share in basis points.
+    ///
+    /// Returns `None` when unset; callers should treat that as 100 % treasury.
+    pub fn get_treasury_fee_share_bps(env: Env) -> Option<u32> {
+        crate::storage::get_treasury_fee_share_bps(&env)
+    }
+
+    /// Configure the bounty pool address where withdrawn bounty fees will be sent (admin only).
+    pub fn set_bounty(env: Env, admin: Address, bounty: Address) {
+        admin.require_auth();
+        require_admin_auth(&env);
+        crate::storage::set_bounty_address(&env, &bounty);
+    }
+
+    /// Get configured bounty pool address, if any.
+    pub fn get_bounty(env: Env) -> Option<Address> {
+        crate::storage::get_bounty_address(&env)
+    }
+
+    /// Withdraw accumulated bounty pool balance to configured bounty address (admin only).
+    pub fn withdraw_bounty(env: Env, admin: Address) {
+        admin.require_auth();
+        require_admin_auth(&env);
+
+        let bounty_addr = crate::storage::get_bounty_address(&env)
+            .unwrap_or_else(|| env.panic_with_error(crate::types::ContractError::BountyNotSet));
+
+        let amount = crate::storage::get_bounty_balance(&env);
+        if amount == 0 {
+            return;
+        }
+
+        let token_address: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::LiquidityToken)
+            .unwrap_or_else(|| {
+                env.panic_with_error(crate::types::ContractError::MissingLiquidityToken)
+            });
+
+        let token_client = token::Client::new(&env, &token_address);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&contract_address, &bounty_addr, &amount);
+
+        crate::storage::clear_bounty_balance(&env);
     }
 
     /// Withdraw accumulated treasury balance to configured treasury address (admin only).

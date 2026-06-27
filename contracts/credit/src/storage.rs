@@ -74,7 +74,8 @@ use soroban_sdk::{contracttype, Address, Env, Symbol};
 ///   `CreditLineCount`, `TotalUtilized`, `MaxDrawAmount`, `MaxRepayAmount`,
 ///   `DrawMinIntervalSeconds`, `MinCreditLimit`, `MaxCreditLimit`,
 ///   `PenaltySurchargeBps`, `LateFeeFlat`, `AuctionContract`, `MaxTotalExposure`,
-///   `ProtocolFeeBps`, `TreasuryAddress`, `TreasuryBalance`,
+///   `ProtocolFeeBps`, `TreasuryFeeShareBps`, `TreasuryAddress`, `TreasuryBalance`,
+///   `BountyAddress`, `BountyBalance`,
 ///   `TotalCollateral`,
 ///   `MinCollateralRatioBps`, `OracleConfig`, `OracleLastPrice`,
 ///   `OracleLastPriceTs`).
@@ -156,10 +157,17 @@ pub enum DataKey {
     MaxTotalExposure,
     /// Protocol fee in basis points applied to interest portion of repayments.
     ProtocolFeeBps,
+    /// Treasury share of skimmed protocol fees in basis points (0..=10_000).
+    /// When unset, defaults to 10_000 (100 % treasury).
+    TreasuryFeeShareBps,
     /// Treasury address where withdrawn fees will be sent.
     TreasuryAddress,
     /// Accumulated treasury balance held in contract (fees collected).
     TreasuryBalance,
+    /// Bounty pool address where withdrawn bounty fees will be sent.
+    BountyAddress,
+    /// Accumulated bounty pool balance held in contract (fee share).
+    BountyBalance,
     /// Per-borrower collateral balance.
     CollateralBalance(Address),
     /// Minimum collateral ratio in basis points.
@@ -495,14 +503,59 @@ pub fn clear_treasury_balance(env: &Env) {
         .set(&DataKey::TreasuryBalance, &0_i128);
 }
 
-/// Minimum TTL threshold for credit-line persistent entries.
-/// If the remaining TTL falls below this ledger count we extend it.
-/// Approximately 1 day at the Stellar Mainnet rate of ~6 s/ledger.
-pub const CREDIT_LINE_TTL_THRESHOLD: u32 = 14_400;
+/// Return configured treasury fee share in basis points, if set.
+pub fn get_treasury_fee_share_bps(env: &Env) -> Option<u32> {
+    env.storage()
+        .instance()
+        .get(&DataKey::TreasuryFeeShareBps)
+}
 
-/// Target TTL to extend credit-line persistent entries to on every interaction.
-/// Approximately 30 days at the Stellar Mainnet rate of ~6 s/ledger.
-pub const CREDIT_LINE_TTL_EXTEND_TO: u32 = 432_000;
+/// Persist treasury fee share in basis points.
+pub fn set_treasury_fee_share_bps(env: &Env, bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::TreasuryFeeShareBps, &bps);
+}
+
+/// Return configured bounty pool address, if set.
+pub fn get_bounty_address(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::BountyAddress)
+}
+
+/// Persist configured bounty pool address.
+pub fn set_bounty_address(env: &Env, bounty: &Address) {
+    env.storage()
+        .instance()
+        .set(&DataKey::BountyAddress, bounty);
+}
+
+/// Return accumulated bounty pool balance.
+pub fn get_bounty_balance(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::BountyBalance)
+        .unwrap_or(0)
+}
+
+/// Add to accumulated bounty pool balance.
+pub fn add_bounty_balance(env: &Env, amount: i128) {
+    if amount == 0 {
+        return;
+    }
+    let updated_balance = get_bounty_balance(env)
+        .checked_add(amount)
+        .unwrap_or_else(|| env.panic_with_error(ContractError::Overflow));
+    env.storage()
+        .instance()
+        .set(&DataKey::BountyBalance, &updated_balance);
+}
+
+/// Clear accumulated bounty pool balance after withdrawal.
+pub fn clear_bounty_balance(env: &Env) {
+    env.storage()
+        .instance()
+        .set(&DataKey::BountyBalance, &0_i128);
+}
 
 pub fn admin_key(env: &Env) -> Symbol {
     Symbol::new(env, "admin")

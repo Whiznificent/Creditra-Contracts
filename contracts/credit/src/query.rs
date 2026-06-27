@@ -21,11 +21,20 @@ use soroban_sdk::{Address, Env};
 /// the last checkpoint is **not** applied by this query.
 #[allow(dead_code)]
 pub fn get_credit_line(env: Env, borrower: Address) -> Option<CreditLineData> {
-    let result: Option<CreditLineData> = env.storage().persistent().get(&borrower);
-    if result.is_some() {
-        env.storage()
-            .persistent()
-            .extend_ttl(&borrower, CREDIT_LINE_TTL_THRESHOLD, CREDIT_LINE_TTL_EXTEND_TO);
+    crate::storage::get_credit_line(&env, &borrower)
+}
+
+/// Return protocol-level dashboard aggregates in one read-only call.
+///
+/// This reads only aggregate storage slots and does not touch per-borrower
+/// records, so it does not bump persistent-entry TTL.
+pub fn get_protocol_summary(env: Env) -> ProtocolSummary {
+    ProtocolSummary {
+        count: crate::storage::get_credit_line_count(&env),
+        total_utilized: crate::storage::get_total_utilized(&env),
+        total_collateral: crate::storage::get_total_collateral(&env),
+        treasury_balance: crate::storage::get_treasury_balance(&env),
+        bounty_balance: crate::storage::get_bounty_balance(&env),
     }
     result
 }

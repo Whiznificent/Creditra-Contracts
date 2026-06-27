@@ -180,8 +180,14 @@ pub struct DrawnEventV2 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FeeAccruedEvent {
     pub borrower: Address,
+    /// Total protocol fee skimmed from the repayment.
     pub fee_amount: i128,
+    /// Treasury portion of `fee_amount` credited to `TreasuryBalance`.
+    pub treasury_amount: i128,
+    /// Bounty pool portion of `fee_amount` credited to `BountyBalance`.
+    pub bounty_amount: i128,
     pub new_treasury_balance: i128,
+    pub new_bounty_balance: i128,
 }
 
 #[contracttype]
