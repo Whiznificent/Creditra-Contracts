@@ -149,18 +149,19 @@ pub fn verify_vrf_commitment(env: &Env, borrower: &Address, risk_score: u32) -> 
 fn derive_score_from_hash(hash: &BytesN<32>) -> u32 {
     let mut sum: u32 = 0;
     for i in 0..32 {
-        let byte = hash.get(i).unwrap_or(0);
-        sum = sum.saturating_add(byte as u32);
+        let byte = hash.get(i);
+        if let Some(b) = byte {
+            sum = sum.saturating_add(b as u32);
+        }
     }
     sum % 101 // Modulo 101 gives range [0, 100]
 }
 
 /// Test helper function to expose score derivation for testing.
 ///
-/// This function is only available in test builds and allows integration tests
-/// to verify the score derivation logic without needing to commit and verify
-/// through the full workflow.
-#[cfg(test)]
+/// This function allows integration tests to verify the score derivation logic
+/// without needing to commit and verify through the full workflow.
+#[doc(hidden)]
 pub fn derive_score_from_hash_test_helper(hash: &BytesN<32>) -> u32 {
     derive_score_from_hash(hash)
 }
