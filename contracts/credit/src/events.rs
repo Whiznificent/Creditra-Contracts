@@ -130,6 +130,19 @@ pub struct DrawReversedEvent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DrawsFrozenEvent {
     pub frozen: bool,
+    pub reason: crate::types::FreezeReason,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreditLineFreezeEvent {
+    pub borrower: soroban_sdk::Address,
+    /// Structured reason for the freeze action.
+    pub reason: crate::types::FreezeReason,
+    /// `true` when frozen; `false` when unfrozen.
+    pub frozen: bool,
+    /// Ledger sequence at time of change (for off-chain indexers).
+    pub ledger: u32,
 }
 
 #[contracttype]
@@ -138,6 +151,16 @@ pub struct BorrowerBlockedEvent {
     pub borrower: Address,
     /// true = borrower was blocked; false = borrower was unblocked
     pub blocked: bool,
+    /// Ledger sequence at time of change (for off-chain indexers)
+    pub ledger: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BorrowerFrozenEvent {
+    pub borrower: Address,
+    /// Timestamp (ledger seconds) until which draws are frozen.
+    pub frozen_until: u64,
     /// Ledger sequence at time of change (for off-chain indexers)
     pub ledger: u32,
 }
@@ -157,8 +180,14 @@ pub struct DrawnEventV2 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FeeAccruedEvent {
     pub borrower: Address,
+    /// Total protocol fee skimmed from the repayment.
     pub fee_amount: i128,
+    /// Treasury portion of `fee_amount` credited to `TreasuryBalance`.
+    pub treasury_amount: i128,
+    /// Bounty pool portion of `fee_amount` credited to `BountyBalance`.
+    pub bounty_amount: i128,
     pub new_treasury_balance: i128,
+    pub new_bounty_balance: i128,
 }
 
 #[contracttype]
@@ -274,10 +303,28 @@ pub fn publish_interest_accrued_event(env: &Env, event: InterestAccruedEvent) {
         .publish((symbol_short!("credit"), symbol_short!("accrue")), event);
 }
 
-pub fn publish_draws_frozen_event(env: &Env, frozen: bool) {
+pub fn publish_draws_frozen_event(env: &Env, frozen: bool, reason: crate::types::FreezeReason) {
     env.events().publish(
         (symbol_short!("credit"), Symbol::new(env, "drw_freeze")),
-        DrawsFrozenEvent { frozen },
+        DrawsFrozenEvent { frozen, reason },
+    );
+}
+
+/// Publish a per-credit-line freeze/unfreeze event.
+pub fn publish_credit_line_freeze_event(
+    env: &Env,
+    borrower: &soroban_sdk::Address,
+    reason: crate::types::FreezeReason,
+    frozen: bool,
+) {
+    env.events().publish(
+        (symbol_short!("credit"), Symbol::new(env, "line_frz")),
+        CreditLineFreezeEvent {
+            borrower: borrower.clone(),
+            reason,
+            frozen,
+            ledger: env.ledger().sequence(),
+        },
     );
 }
 
@@ -327,6 +374,27 @@ pub fn publish_borrower_blocked_event(env: &Env, borrower: &Address, blocked: bo
         },
     );
 }
+
+/// Publish a borrower temporary freeze event.
+///
+/// Emitted when an admin sets a time-bounded freeze on a borrower's draws.
+/// The `frozen_until` field records the ledger timestamp at which the freeze
+/// will auto-expire.
+///
+/// # Topic
+/// `("credit", "brw_frz")`
+pub fn publish_borrower_frozen_event(env: &Env, borrower: &Address, frozen_until: u64) {
+    env.events().publish(
+        (Symbol::new(env, "br_freeze"),),
+        BorrowerFrozenEvent {
+            borrower: borrower.clone(),
+            frozen_until,
+            ledger: env.ledger().sequence(),
+        },
+    );
+}
+
+/// Publish a penalty rate entered event when a line becomes delinquent.
 
 /// Publish a penalty rate entered event when a line becomes delinquent.
 pub fn publish_penalty_rate_entered_event(

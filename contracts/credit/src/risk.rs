@@ -60,12 +60,8 @@
 
 use crate::auth::require_admin_auth;
 use crate::events::{publish_risk_parameters_updated, RiskParametersUpdatedEvent};
-use crate::storage::{
-    assert_not_paused, assert_ts_monotonic, persist_credit_line, rate_cfg_key, rate_formula_key,
-};
-use crate::types::{
-    ContractError, CreditLineData, CreditStatus, RateChangeConfig, RateFormulaConfig,
-};
+use crate::storage::{rate_cfg_key, CREDIT_LINE_TTL_EXTEND_TO, CREDIT_LINE_TTL_THRESHOLD};
+use crate::types::{CreditLineData, RateChangeConfig};
 use soroban_sdk::{Address, Env};
 
 /// Maximum interest rate in basis points (100%).
@@ -74,60 +70,77 @@ pub const MAX_INTEREST_RATE_BPS: u32 = 10_000;
 /// Maximum risk score on the normalized 0-100 scale.
 pub const MAX_RISK_SCORE: u32 = 100;
 
-/// Compute an interest rate in basis points from a normalised risk score.
-///
-/// Maps a borrower's risk score linearly onto the range
-/// `[min_rate_bps, max_rate_bps]`. A score of `0` maps to `min_rate_bps`
-/// (lowest risk, lowest rate) and a score of `100` maps to `max_rate_bps`
-/// (highest risk, highest rate).
-///
-/// Formula:
-/// ```text
-/// rate = min_rate_bps + (max_rate_bps - min_rate_bps) * score / 100
-/// ```
-///
-/// # Rounding
-/// Truncates toward zero. For example, a spread of `999` bps over a score of
-/// `1` yields `9` bps (`9.99` truncated), not `10`.
-///
-/// # Parameters
-/// assert_eq!(compute_rate_from_score_linear(50, 200, 800), 500);
-///                   Values outside this range are accepted but produce
-///                   extrapolated results; callers should validate first.
-/// assert_eq!(compute_rate_from_score_linear(0, 200, 800), 200);
-/// - `max_rate_bps`: Rate assigned to a score of `100` (worst credit).
-///
-/// assert_eq!(compute_rate_from_score_linear(100, 200, 800), 800);
-/// Interest rate in basis points for the given score, clamped implicitly by
-/// the linear interpolation between `min_rate_bps` and `max_rate_bps`.
-///
-/// # Panics
-/// - If `max_rate_bps < min_rate_bps` (invalid range).
-///
-/// Compute interest rate from risk score using piecewise-linear formula.
-///
-/// # Formula
-/// ```text
-/// raw_rate = base_rate_bps + (risk_score * slope_bps_per_score)
-/// effective_rate = clamp(raw_rate, min_rate_bps, min(max_rate_bps, MAX_INTEREST_RATE_BPS))
-/// ```
-///
-/// Uses saturating arithmetic to prevent overflow — if the multiplication
-/// overflows u32, it saturates to `u32::MAX` and is then clamped by the
-/// upper bound.
-///
-/// # Arguments
-/// * `cfg` — The rate formula configuration.
-/// * `risk_score` — The borrower's risk score (0–100).
-///
-/// # Returns
-/// The computed effective interest rate in basis points.
-pub fn compute_rate_from_score(cfg: &RateFormulaConfig, risk_score: u32) -> u32 {
-    let raw = cfg
-        .base_rate_bps
-        .saturating_add(risk_score.saturating_mul(cfg.slope_bps_per_score));
-    let upper = cfg.max_rate_bps.min(MAX_INTEREST_RATE_BPS);
-    raw.clamp(cfg.min_rate_bps, upper)
+pub fn update_risk_parameters(
+    env: Env,
+    borrower: Address,
+    credit_limit: i128,
+    interest_rate_bps: u32,
+    risk_score: u32,
+) {
+    require_admin_auth(&env);
+
+    let mut credit_line: CreditLineData = env
+        .storage()
+        .persistent()
+        .get(&borrower)
+        .expect("Credit line not found");
+
+    if credit_limit < 0 {
+        panic!("credit_limit must be non-negative");
+    }
+    if credit_limit < credit_line.utilized_amount {
+        panic!("credit_limit cannot be less than utilized amount");
+    }
+    if interest_rate_bps > MAX_INTEREST_RATE_BPS {
+        panic!("interest_rate_bps exceeds maximum");
+    }
+    if risk_score > MAX_RISK_SCORE {
+        panic!("risk_score exceeds maximum");
+    }
+
+    if interest_rate_bps != credit_line.interest_rate_bps {
+        if let Some(cfg) = env
+            .storage()
+            .instance()
+            .get::<_, RateChangeConfig>(&rate_cfg_key(&env))
+        {
+            let old_rate = credit_line.interest_rate_bps;
+            let delta = interest_rate_bps.abs_diff(old_rate);
+
+            if delta > cfg.max_rate_change_bps {
+                panic!("rate change exceeds maximum allowed delta");
+            }
+
+            if cfg.rate_change_min_interval > 0 && credit_line.last_rate_update_ts != 0 {
+                let now = env.ledger().timestamp();
+                let elapsed = now.saturating_sub(credit_line.last_rate_update_ts);
+                if elapsed < cfg.rate_change_min_interval {
+                    panic!("rate change too soon: minimum interval not elapsed");
+                }
+            }
+        }
+
+        credit_line.last_rate_update_ts = env.ledger().timestamp();
+    }
+
+    credit_line.credit_limit = credit_limit;
+    credit_line.interest_rate_bps = interest_rate_bps;
+    credit_line.risk_score = risk_score;
+    env.storage().persistent().set(&borrower, &credit_line);
+    // Bump TTL: every risk-parameter update is an interaction with the line.
+    env.storage()
+        .persistent()
+        .extend_ttl(&borrower, CREDIT_LINE_TTL_THRESHOLD, CREDIT_LINE_TTL_EXTEND_TO);
+
+    publish_risk_parameters_updated(
+        &env,
+        RiskParametersUpdatedEvent {
+            borrower: borrower.clone(),
+            credit_limit,
+            interest_rate_bps,
+            risk_score,
+        },
+    );
 }
 
 /// Set optional global rate-change caps (admin only).
@@ -302,6 +315,18 @@ pub fn update_risk_parameters(
         env.panic_with_error(ContractError::ScoreTooHigh);
     }
 
+    // Verify VRF commitment if score is changing
+    if risk_score != credit_line.risk_score {
+        if let Some(_commitment) = crate::scoring::get_vrf_commitment(&env, &borrower) {
+            // VRF commitment exists - verify the score matches
+            if !crate::scoring::verify_vrf_commitment(&env, &borrower, risk_score) {
+                env.panic_with_error(ContractError::Unauthorized);
+            }
+        }
+        // If no commitment exists, allow the update for backward compatibility
+        // (existing credit lines without VRF commitments)
+    }
+
     // Validate credit limit is within configured bounds
     crate::lifecycle::validate_credit_limit_bounds(&env, credit_limit);
 
@@ -354,6 +379,7 @@ pub fn update_risk_parameters(
     credit_line.interest_rate_bps = final_rate;
     credit_line.risk_score = risk_score;
 
+    let previous_status = credit_line.status;
     // Handle limit decrease: transition to Restricted if utilization exceeds new limit
     if credit_line.utilized_amount > credit_limit {
         credit_line.status = CreditStatus::Restricted;
@@ -361,7 +387,13 @@ pub fn update_risk_parameters(
 
     credit_line.credit_limit = credit_limit;
 
-    persist_credit_line(&env, &borrower, &credit_line, previous_utilized);
+    persist_credit_line(
+        &env,
+        &borrower,
+        &credit_line,
+        previous_utilized,
+        Some(previous_status),
+    );
 
     publish_risk_parameters_updated(
         &env,

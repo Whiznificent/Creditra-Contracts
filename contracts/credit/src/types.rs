@@ -8,8 +8,9 @@
 //!
 //! ABI-stable types that cross the contract boundary:
 //!
-//! - [`ContractError`] — 38-variant `#[repr(u32)]` error enum (discriminants
-//!   pinned by `tests/error_discriminants.rs`). See
+//! - [`ContractError`] — 40-variant `#[repr(u32)]` error enum (discriminants
+//!   pinned by `tests/error_discriminants.rs`). Each variant maps to a stable
+//!   [`ContractErrorCategory`] via [`ContractError::category`]. See
 //!   [`docs/contract-errors.md`](../../../docs/contract-errors.md) for the
 //!   flat code table and
 //!   [`docs/error-taxonomy.md`](../../../docs/error-taxonomy.md) for the
@@ -90,6 +91,12 @@ pub enum CreditStatus {
 /// variants — doing so would break deployed SDK clients. New variants must be
 /// appended at the end with the next available integer.
 ///
+/// # Category
+/// Use [`ContractError::category`] to map any error to its
+/// [`ContractErrorCategory`] for client-side grouping. See
+/// [`docs/error-taxonomy.md`](../../../docs/error-taxonomy.md) for the
+/// categorized reference with recovery actions.
+///
 /// # Discriminant table (source of truth)
 /// | Code | Variant                        | Description |
 /// |------|--------------------------------|-------------|
@@ -132,6 +139,9 @@ pub enum CreditStatus {
 /// | 37   | `OraclePriceStale`            | Oracle price is stale (exceeds max_age_seconds) |
 /// | 38   | `OraclePriceDeviation`        | Oracle price deviation exceeds the configured maximum |
 /// | 39   | `InsufficientCollateralBalance` | Borrower collateral balance cannot cover withdrawal |
+/// | 40   | `BorrowerFrozen`               | Borrower's draws are temporarily frozen until expiry |
+/// | 41   | `DrawReversalWindowExpired`     | Draw reversal window has expired |
+/// | 42   | `OriginalDrawNotFound`           | Original draw record not found for borrower |
 #[soroban_sdk::contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -214,8 +224,12 @@ pub enum ContractError {
     OraclePriceDeviation = 38,
     /// Borrower's collateral balance is below the requested withdrawal amount.
     InsufficientCollateralBalance = 39,
-    /// The supplied close_factor_bps exceeds the protocol-configured maximum.
-    CloseFactorAboveMax = 40,
+    /// Borrower's draws are temporarily frozen until the specified expiry timestamp.
+    BorrowerFrozen = 40,
+    /// Draw reversal window has expired (admin must reverse within DRAW_REVERSAL_WINDOW_SECS).
+    DrawReversalWindowExpired = 41,
+    /// Original draw audit record not found for the specified (borrower, timestamp) pair.
+    OriginalDrawNotFound = 42,
 }
 
 /// Stored credit line data for a borrower.
@@ -384,4 +398,35 @@ pub struct ProtocolSummary {
     pub total_collateral: i128,
     /// Accumulated protocol fees awaiting treasury withdrawal.
     pub treasury_balance: i128,
+    /// Accumulated bounty pool fees awaiting bounty withdrawal.
+    pub bounty_balance: i128,
+}
+
+/// Protocol summary returned by the specific query view for GrantFox campaign.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolSummaryView {
+    /// Global utilized principal accumulator.
+    pub total_utilized: i128,
+    /// Global collateral balance accumulator.
+    pub total_collateral: i128,
+    /// Count of currently Active credit lines.
+    pub active_line_count: u32,
+}
+
+/// Reason for protocol pause (escape-hatch audit trail).
+///
+/// Stored alongside the pause flag in instance storage when the admin invokes
+/// `set_protocol_paused`. Intended for governance transparency and off-chain
+/// monitoring — the reason is a human-readable symbol that indexers and
+/// dashboards can display to explain why the protocol is paused.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PauseReason {
+    /// Human-readable reason for pausing (e.g., "oracle-outage", "token-migration").
+    pub reason: soroban_sdk::Symbol,
+    /// Ledger timestamp when the pause was activated.
+    pub timestamp: u64,
+    /// Admin address that invoked the pause.
+    pub actor: soroban_sdk::Address,
 }

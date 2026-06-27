@@ -58,7 +58,9 @@
 //! [`docs/PROTOCOL_SPEC.md`](../../../docs/PROTOCOL_SPEC.md) §3 for the
 //! full per-variant tier table.
 
-use crate::types::{ContractError, CreditLineData, RepaymentSchedule};
+use crate::types::{
+    ContractError, CreditLineData, CreditStatus, DrawsFreezeState, FreezeReason, RepaymentSchedule,
+};
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 /// Storage keys used in instance and persistent storage.
@@ -72,13 +74,14 @@ use soroban_sdk::{contracttype, Address, Env, Symbol};
 ///   `CreditLineCount`, `TotalUtilized`, `MaxDrawAmount`, `MaxRepayAmount`,
 ///   `DrawMinIntervalSeconds`, `MinCreditLimit`, `MaxCreditLimit`,
 ///   `PenaltySurchargeBps`, `LateFeeFlat`, `AuctionContract`, `MaxTotalExposure`,
-///   `ProtocolFeeBps`, `TreasuryAddress`, `TreasuryBalance`,
+///   `ProtocolFeeBps`, `TreasuryFeeShareBps`, `TreasuryAddress`, `TreasuryBalance`,
+///   `BountyAddress`, `BountyBalance`,
 ///   `TotalCollateral`,
 ///   `MinCollateralRatioBps`, `OracleConfig`, `OracleLastPrice`,
 ///   `OracleLastPriceTs`).
 /// - **Persistent storage** for per-borrower / per-timestamp data
 ///   (`CreditLineIdByBorrower`, `CreditLineBorrowerById`, `LastDrawTs`,
-///   `BlockedBorrower`, `UtilizationCapBps`, `RateFloorBps`,
+///   `BlockedBorrower`, `FrozenBorrower`, `UtilizationCapBps`, `RateFloorBps`,
 ///   `RepaymentSchedule`, `CollateralBalance`, `DrawAudit`,
 ///   `DrawReversedAmount`).
 ///
@@ -99,6 +102,8 @@ pub enum DataKey {
     SchemaVersion,
     /// Monotonic count of unique borrowers that have had a credit line recorded.
     CreditLineCount,
+    /// Count of currently Active credit lines.
+    ActiveLineCount,
     /// Borrower → stable numeric id used for deterministic enumeration.
     CreditLineIdByBorrower(Address),
     /// Stable numeric id → borrower address.
@@ -113,6 +118,13 @@ pub enum DataKey {
     LastDrawTs(Address),
     /// Per-borrower block flag; when `true`, draw_credit is rejected.
     BlockedBorrower(Address),
+    /// Per-borrower temporary freeze expiry timestamp; draws blocked while now < expiry_ts.
+    /// When key is absent or expiry_ts <= now, the borrower is not frozen.
+    FrozenBorrower(Address),
+    /// Per-borrower credit-line draw freeze with structured reason taxonomy.
+    /// When absent, the line is not admin-frozen (distinct from [`CreditStatus::Suspended`]).
+    CreditLineFreeze(Address),
+
     /// Per-borrower max utilization ratio cap in basis points (e.g. 8000 = 80%).
     /// When set, draw_credit enforces: utilized_amount <= credit_limit * cap_bps / 10_000.
     UtilizationCapBps(Address),
@@ -124,6 +136,9 @@ pub enum DataKey {
     RateCeilingBps(Address),
     /// Per-borrower installment schedule for delinquency tracking.
     RepaymentSchedule(Address),
+    /// Per-borrower VRF commitment for credit score derivation.
+    /// Stores the hash of the VRF output that the risk score must be derived from.
+    VrfCommitment(Address),
     /// Minimum allowed credit limit for new credit lines (admin-configurable).
     MinCreditLimit,
     /// Maximum allowed credit limit for new credit lines (admin-configurable).
@@ -146,10 +161,17 @@ pub enum DataKey {
     MinProtocolFeeBps,
     /// Maximum allowed protocol fee in basis points (governance-configurable).
     MaxProtocolFeeBps,
+    /// Treasury share of skimmed protocol fees in basis points (0..=10_000).
+    /// When unset, defaults to 10_000 (100 % treasury).
+    TreasuryFeeShareBps,
     /// Treasury address where withdrawn fees will be sent.
     TreasuryAddress,
     /// Accumulated treasury balance held in contract (fees collected).
     TreasuryBalance,
+    /// Bounty pool address where withdrawn bounty fees will be sent.
+    BountyAddress,
+    /// Accumulated bounty pool balance held in contract (fee share).
+    BountyBalance,
     /// Per-borrower collateral balance.
     CollateralBalance(Address),
     /// Minimum collateral ratio in basis points.
@@ -166,11 +188,9 @@ pub enum DataKey {
     OracleLastPriceTs,
     /// Global sum of every borrower's collateral balance.
     TotalCollateral,
-    /// Max close factor in basis points for default-liquidation settlement.
-    /// When set, `settle_default_liquidation` caps the caller-supplied
-    /// `close_factor_bps` to this value. Defaults to 10_000 (full recovery)
-    /// when absent.
-    CloseFactorBps,
+    /// Structured reason for the most recent protocol pause (escape-hatch audit trail).
+    /// Stored when admin invokes pause with a reason; cleared on unpause.
+    PauseReason,
 }
 
 /// Maximum number of credit lines returned per page.
@@ -270,6 +290,30 @@ pub fn get_credit_line_count(env: &Env) -> u32 {
         .unwrap_or(0)
 }
 
+/// Return the count of currently Active credit lines.
+pub fn get_active_line_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ActiveLineCount)
+        .unwrap_or(0)
+}
+
+/// Increment the count of currently Active credit lines.
+pub fn increment_active_line_count(env: &Env) {
+    let count = get_active_line_count(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::ActiveLineCount, &count.saturating_add(1));
+}
+
+/// Decrement the count of currently Active credit lines.
+pub fn decrement_active_line_count(env: &Env) {
+    let count = get_active_line_count(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::ActiveLineCount, &count.saturating_sub(1));
+}
+
 /// Return the configured global exposure cap, if set.
 pub fn get_max_total_exposure(env: &Env) -> Option<i128> {
     env.storage().instance().get(&DataKey::MaxTotalExposure)
@@ -360,11 +404,21 @@ pub fn persist_credit_line(
     borrower: &Address,
     line: &CreditLineData,
     previous_utilized: i128,
+    previous_status: Option<CreditStatus>,
 ) {
     ensure_credit_line_id(env, borrower);
     env.storage().persistent().set(borrower, line);
     bump_credit_line_ttl(env, borrower);
     adjust_total_utilized(env, previous_utilized, line.utilized_amount);
+
+    let is_now_active = line.status == CreditStatus::Active;
+    let was_active = previous_status == Some(CreditStatus::Active);
+
+    if is_now_active && !was_active {
+        increment_active_line_count(env);
+    } else if !is_now_active && was_active {
+        decrement_active_line_count(env);
+    }
 }
 
 /// Return a borrower's collateral balance without bumping unrelated TTL.
@@ -486,6 +540,60 @@ pub fn clear_treasury_balance(env: &Env) {
     env.storage()
         .instance()
         .set(&DataKey::TreasuryBalance, &0_i128);
+}
+
+/// Return configured treasury fee share in basis points, if set.
+pub fn get_treasury_fee_share_bps(env: &Env) -> Option<u32> {
+    env.storage()
+        .instance()
+        .get(&DataKey::TreasuryFeeShareBps)
+}
+
+/// Persist treasury fee share in basis points.
+pub fn set_treasury_fee_share_bps(env: &Env, bps: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::TreasuryFeeShareBps, &bps);
+}
+
+/// Return configured bounty pool address, if set.
+pub fn get_bounty_address(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::BountyAddress)
+}
+
+/// Persist configured bounty pool address.
+pub fn set_bounty_address(env: &Env, bounty: &Address) {
+    env.storage()
+        .instance()
+        .set(&DataKey::BountyAddress, bounty);
+}
+
+/// Return accumulated bounty pool balance.
+pub fn get_bounty_balance(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::BountyBalance)
+        .unwrap_or(0)
+}
+
+/// Add to accumulated bounty pool balance.
+pub fn add_bounty_balance(env: &Env, amount: i128) {
+    if amount == 0 {
+        return;
+    }
+    let updated_balance = get_bounty_balance(env)
+        .checked_add(amount)
+        .unwrap_or_else(|| env.panic_with_error(ContractError::Overflow));
+    env.storage()
+        .instance()
+        .set(&DataKey::BountyBalance, &updated_balance);
+}
+
+/// Clear accumulated bounty pool balance after withdrawal.
+pub fn clear_bounty_balance(env: &Env) {
+    env.storage()
+        .instance()
+        .set(&DataKey::BountyBalance, &0_i128);
 }
 
 pub fn admin_key(env: &Env) -> Symbol {
@@ -785,16 +893,18 @@ pub fn set_draw_min_interval(env: &Env, seconds: u64) {
 }
 
 /// Set/unset the global draws frozen flag (admin only, enforced by caller).
-pub fn set_draws_frozen(env: &Env, frozen: bool) {
-    env.storage().instance().set(&DataKey::DrawsFrozen, &frozen);
+pub fn set_draws_frozen(env: &Env, frozen: bool, reason: FreezeReason) {
+    env.storage()
+        .instance()
+        .set(&DataKey::DrawsFrozen, &DrawsFreezeState { frozen, reason });
 }
 
 /// Check if draws are globally frozen.
 pub fn is_draws_frozen(env: &Env) -> bool {
     env.storage()
         .instance()
-        .get(&DataKey::DrawsFrozen)
-        .unwrap_or(false)
+        .get::<DataKey, DrawsFreezeState>(&DataKey::DrawsFrozen)
+        .map_or(false, |state| state.frozen)
 }
 
 /// Check if the protocol is paused.
@@ -813,6 +923,28 @@ pub fn is_paused(env: &Env) -> bool {
 /// - **TTL Note**: Shares instance TTL — extend alongside other instance keys.
 pub fn set_paused(env: &Env, paused: bool) {
     env.storage().instance().set(&paused_key(env), &paused);
+    if !paused {
+        // Clear the pause reason when unpausing.
+        env.storage().instance().remove(&DataKey::PauseReason);
+    }
+}
+
+/// Get the structured pause reason, if one was recorded during the last pause.
+///
+/// Returns `None` when no pause reason was set (e.g., before any pause or
+/// if the admin used the reason-less `set_protocol_paused(bool)`).
+pub fn get_pause_reason(env: &Env) -> Option<crate::types::PauseReason> {
+    env.storage().instance().get(&DataKey::PauseReason)
+}
+
+/// Store a structured pause reason alongside the pause flag.
+///
+/// Should be called by the entrypoint that sets the pause flag, so the reason
+/// and the flag are written atomically within the same host transaction.
+pub fn set_pause_reason(env: &Env, reason: &crate::types::PauseReason) {
+    env.storage()
+        .instance()
+        .set(&DataKey::PauseReason, reason);
 }
 
 /// Assert the protocol is not paused. Reverts with ContractError::Paused if paused.
@@ -958,4 +1090,70 @@ pub fn set_late_fee_flat(env: &Env, fee: i128) {
 /// Unblock a borrower (convenience wrapper).
 pub fn set_borrower_unblocked(env: &Env, borrower: &Address) {
     set_borrower_blocked(env, borrower, false);
+}
+
+// ── Borrower temporary freeze helpers ────────────────────────────────────────
+
+/// Freeze a borrower's draws until the specified expiry timestamp (admin only,
+/// enforced by caller).
+///
+/// Stores the expiry `u64` timestamp under [`DataKey::FrozenBorrower(Address)`]
+/// in persistent storage. Draws are blocked when `env.ledger().timestamp() < expiry_ts`.
+/// Once the expiry is reached or passed, draws automatically resume — no admin
+/// unfreeze call is required.
+///
+/// # Auto-expiry
+/// The freeze is time-bounded: [`is_borrower_frozen`] compares the current
+/// ledger timestamp against the stored expiry. When `now >= expiry_ts`, it
+/// returns `false` without any admin intervention.
+///
+/// # Storage
+/// - **Type**: Persistent storage (per-borrower, shares TTL with other persistent keys)
+/// - **Key**: [`DataKey::FrozenBorrower`]
+pub fn set_borrower_frozen_until(env: &Env, borrower: &Address, expiry_ts: u64) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::FrozenBorrower(borrower.clone()), &expiry_ts);
+}
+
+/// Check if a borrower is temporarily frozen from drawing.
+///
+/// Returns `true` when the current ledger timestamp is strictly less than the
+/// stored expiry timestamp. Returns `false` when:
+/// - No freeze has been set (key is absent),
+/// - The freeze has expired (`now >= expiry_ts`).
+///
+/// # Time semantics
+/// Uses `env.ledger().timestamp()` so the check is deterministic per ledger.
+///
+/// # Storage
+/// - **Type**: Persistent storage read
+/// - **Key**: [`DataKey::FrozenBorrower`]
+pub fn is_borrower_frozen(env: &Env, borrower: &Address) -> bool {
+    let now = env.ledger().timestamp();
+    env.storage()
+        .persistent()
+        .get(&DataKey::FrozenBorrower(borrower.clone()))
+        .map_or(false, |expiry: u64| now < expiry)
+}
+
+/// Get the freeze expiry timestamp for a borrower, if one is set.
+///
+/// Returns `Some(expiry_ts)` when a temporary freeze is in effect (even if
+/// expired — callers should compare against `now` themselves). Returns `None`
+/// when no freeze has ever been set.
+pub fn get_borrower_frozen_until(env: &Env, borrower: &Address) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::FrozenBorrower(borrower.clone()))
+}
+
+/// Remove the temporary freeze for a borrower (admin only, enforced by caller).
+///
+/// This is a convenience for an admin who wants to lift a freeze before its
+/// natural expiry. If no freeze was set, this is a no-op.
+pub fn clear_borrower_frozen(env: &Env, borrower: &Address) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::FrozenBorrower(borrower.clone()));
 }
