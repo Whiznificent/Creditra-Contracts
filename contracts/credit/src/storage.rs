@@ -7,6 +7,15 @@ pub enum DataKey {
     LiquiditySource,
 }
 
+/// Minimum TTL threshold for credit-line persistent entries.
+/// If the remaining TTL falls below this ledger count we extend it.
+/// Approximately 1 day at the Stellar Mainnet rate of ~6 s/ledger.
+pub const CREDIT_LINE_TTL_THRESHOLD: u32 = 14_400;
+
+/// Target TTL to extend credit-line persistent entries to on every interaction.
+/// Approximately 30 days at the Stellar Mainnet rate of ~6 s/ledger.
+pub const CREDIT_LINE_TTL_EXTEND_TO: u32 = 432_000;
+
 pub fn admin_key(env: &Env) -> Symbol {
     Symbol::new(env, "admin")
 }

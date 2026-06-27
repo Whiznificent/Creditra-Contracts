@@ -2,8 +2,12 @@ use crate::auth::require_admin_auth;
 use crate::storage::admin_key;
 use crate::storage::DataKey;
 use soroban_sdk::{Address, Env};
+use crate::types::ContractError;
 
 pub fn init(env: Env, admin: Address) {
+    if env.storage().instance().has(&admin_key(&env)) {
+        env.panic_with_error(ContractError::AlreadyInitialized);
+    }
     env.storage().instance().set(&admin_key(&env), &admin);
     env.storage()
         .instance()

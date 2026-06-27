@@ -1,6 +1,6 @@
 use crate::auth::require_admin_auth;
 use crate::events::{publish_risk_parameters_updated, RiskParametersUpdatedEvent};
-use crate::storage::rate_cfg_key;
+use crate::storage::{rate_cfg_key, CREDIT_LINE_TTL_EXTEND_TO, CREDIT_LINE_TTL_THRESHOLD};
 use crate::types::{CreditLineData, RateChangeConfig};
 use soroban_sdk::{Address, Env};
 
@@ -67,6 +67,10 @@ pub fn update_risk_parameters(
     credit_line.interest_rate_bps = interest_rate_bps;
     credit_line.risk_score = risk_score;
     env.storage().persistent().set(&borrower, &credit_line);
+    // Bump TTL: every risk-parameter update is an interaction with the line.
+    env.storage()
+        .persistent()
+        .extend_ttl(&borrower, CREDIT_LINE_TTL_THRESHOLD, CREDIT_LINE_TTL_EXTEND_TO);
 
     publish_risk_parameters_updated(
         &env,
