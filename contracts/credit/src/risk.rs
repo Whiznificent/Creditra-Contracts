@@ -59,9 +59,9 @@
 #![warn(missing_docs)]
 
 use crate::auth::require_admin_auth;
-use crate::events::{publish_risk_parameters_updated, RiskParametersUpdatedEvent};
+use crate::events::publish_risk_parameters_updated;
 use crate::storage::{
-    assert_not_paused, assert_ts_monotonic, persist_credit_line, rate_cfg_key, rate_formula_key,
+    assert_not_paused, assert_ts_monotonic, get_credit_line, persist_credit_line, rate_cfg_key, rate_formula_key,
 };
 use crate::types::{
     ContractError, CreditLineData, CreditStatus, RateChangeConfig, RateFormulaConfig,
@@ -302,6 +302,18 @@ pub fn update_risk_parameters(
         env.panic_with_error(ContractError::ScoreTooHigh);
     }
 
+    // Verify VRF commitment if score is changing
+    if risk_score != credit_line.risk_score {
+        if let Some(_commitment) = crate::scoring::get_vrf_commitment(&env, &borrower) {
+            // VRF commitment exists - verify the score matches
+            if !crate::scoring::verify_vrf_commitment(&env, &borrower, risk_score) {
+                env.panic_with_error(ContractError::Unauthorized);
+            }
+        }
+        // If no commitment exists, allow the update for backward compatibility
+        // (existing credit lines without VRF commitments)
+    }
+
     // Validate credit limit is within configured bounds
     crate::lifecycle::validate_credit_limit_bounds(&env, credit_limit);
 
@@ -354,6 +366,7 @@ pub fn update_risk_parameters(
     credit_line.interest_rate_bps = final_rate;
     credit_line.risk_score = risk_score;
 
+    let previous_status = credit_line.status;
     // Handle limit decrease: transition to Restricted if utilization exceeds new limit
     if credit_line.utilized_amount > credit_limit {
         credit_line.status = CreditStatus::Restricted;
@@ -361,7 +374,7 @@ pub fn update_risk_parameters(
 
     credit_line.credit_limit = credit_limit;
 
-    persist_credit_line(&env, &borrower, &credit_line, previous_utilized);
+    persist_credit_line(&env, &borrower, &credit_line, previous_utilized, Some(previous_status));
 
     publish_risk_parameters_updated(
         &env,
