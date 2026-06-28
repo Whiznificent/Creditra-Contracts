@@ -5631,3 +5631,6 @@ mod test_mock_liquidity_token {
     }
 }
 }
+
+#[cfg(test)]
+mod test_ttl;
