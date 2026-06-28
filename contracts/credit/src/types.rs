@@ -230,6 +230,8 @@ pub enum ContractError {
     DrawReversalWindowExpired = 41,
     /// Original draw audit record not found for the specified (borrower, timestamp) pair.
     OriginalDrawNotFound = 42,
+    /// No attestation batch has been committed for the specified borrower.
+    AttestationBatchNotFound = 43,
 }
 
 /// Stored credit line data for a borrower.

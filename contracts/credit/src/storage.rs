@@ -191,6 +191,10 @@ pub enum DataKey {
     /// Structured reason for the most recent protocol pause (escape-hatch audit trail).
     /// Stored when admin invokes pause with a reason; cleared on unpause.
     PauseReason,
+    /// Per-borrower aggregated attestation batch committed as a Merkle root.
+    /// Stores an [`crate::attestation::AttestationBatch`] whose `merkle_root`
+    /// is the SHA-256 root of all leaf hashes in the batch.
+    AttestationBatch(Address),
 }
 
 /// Maximum number of credit lines returned per page.

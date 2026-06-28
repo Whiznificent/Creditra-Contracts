@@ -99,6 +99,7 @@ mod accrual;
 mod accrual_tests;
 #[cfg(test)]
 mod amount_validation_tests;
+mod attestation;
 mod auth;
 mod borrow;
 mod config;
@@ -124,6 +125,7 @@ mod risk_formula_tests;
 mod views_tests;
 
 use crate::auth::require_admin_auth;
+use crate::attestation::AttestationBatch;
 use crate::events::{
     publish_admin_rotation_accepted, publish_admin_rotation_proposed,
     publish_borrower_blocked_event, publish_borrower_frozen_event, publish_close_factor_bps_set_event,
@@ -711,6 +713,79 @@ impl Credit {
     /// The VRF commitment data, or `None` if no commitment exists.
     pub fn get_vrf_commitment(env: Env, borrower: Address) -> Option<scoring::VrfCommitment> {
         scoring::get_vrf_commitment(&env, &borrower)
+    }
+
+    // ── Attestation batch ─────────────────────────────────────────────────────
+
+    /// Commit (or replace) an attestation batch for a borrower (admin only).
+    ///
+    /// Stores the SHA-256 Merkle root of all attestation leaf hashes under
+    /// `DataKey::AttestationBatch(borrower)`. A subsequent call for the same
+    /// borrower replaces the previous batch, enabling rolling profile updates.
+    ///
+    /// # Parameters
+    /// - `borrower`:    Address of the borrower this batch describes.
+    /// - `merkle_root`: SHA-256 Merkle root of all leaf hashes in the batch.
+    /// - `count`:       Informational leaf count (stored but not validated).
+    ///
+    /// # Errors
+    /// - `ContractError::Paused` if the protocol is paused.
+    /// - Auth panic if caller is not admin.
+    ///
+    /// # Events
+    /// Emits `("credit", "atst_bat")` with an [`AttestationBatchCommittedEvent`] payload.
+    pub fn commit_attestation_batch(
+        env: Env,
+        borrower: Address,
+        merkle_root: BytesN<32>,
+        count: u32,
+    ) {
+        attestation::commit_attestation_batch(env, borrower, merkle_root, count)
+    }
+
+    /// Verify that a single attestation leaf is included in the stored batch.
+    ///
+    /// Recomputes the Merkle root from `leaf` and the ordered sibling `proof`
+    /// path using sorted-pair hashing, then compares against the committed root.
+    ///
+    /// # Parameters
+    /// - `borrower`: Address of the borrower whose batch to verify against.
+    /// - `leaf`:     SHA-256 hash of the attestation to prove.
+    /// - `proof`:    Ordered sibling-hash path from leaf to root (may be empty
+    ///               for a single-leaf batch).
+    ///
+    /// # Returns
+    /// `true` if the recomputed root matches the stored root; `false` otherwise.
+    ///
+    /// # Errors
+    /// - `ContractError::AttestationBatchNotFound` if no batch has been committed.
+    pub fn verify_attestation_proof(
+        env: Env,
+        borrower: Address,
+        leaf: BytesN<32>,
+        proof: Vec<BytesN<32>>,
+    ) -> bool {
+        attestation::verify_attestation_proof(env, borrower, leaf, proof)
+    }
+
+    /// Get the stored attestation batch for a borrower, if any (read-only).
+    ///
+    /// # Returns
+    /// `Some(AttestationBatch)` if a batch has been committed; `None` otherwise.
+    pub fn get_attestation_batch(env: Env, borrower: Address) -> Option<AttestationBatch> {
+        attestation::get_attestation_batch(env, borrower)
+    }
+
+    /// Clear the attestation batch for a borrower (admin only).
+    ///
+    /// Removes the stored batch from persistent storage.  Useful when a
+    /// borrower's profile is reset or the credit line is closed.
+    ///
+    /// # Errors
+    /// - `ContractError::Paused` if the protocol is paused.
+    /// - Auth panic if caller is not admin.
+    pub fn clear_attestation_batch(env: Env, borrower: Address) {
+        attestation::clear_attestation_batch(env, borrower)
     }
 
     // ── Grace period policy ───────────────────────────────────────────────────
