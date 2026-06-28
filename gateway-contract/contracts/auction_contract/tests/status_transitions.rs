@@ -26,11 +26,10 @@
 //! ```
 
 use gateway_auction::{
-    Auction, AuctionClient, AuctionError, AuctionMode, AuctionState, AuctionStatus,
+    Auction, AuctionClient, AuctionError, AuctionMode, AuctionState, AuctionStatus, DutchAuctionDecay,
 };
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, Symbol};
-
 /// Entrypoints that can attempt an `AuctionStatus` transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Entrypoint {
@@ -153,10 +152,10 @@ fn setup_auction(from: AuctionStatus) -> (Env, Address, Symbol, Address) {
         &u64::MAX,
         &1_i128,
         &0_u32,
-        &None,
-        &None,
-        &None,
-        &None,
+        &DutchAuctionDecay::None,
+       &DutchAuctionDecay::None,
+        &DutchAuctionDecay::None,
+        &DutchAuctionDecay::None,
     );
 
     match from {
