@@ -2127,4 +2127,162 @@ mod reentrancy_preservation {
         }
         assert!(settlement_found, "LIQ_SETL event must be emitted");
     }
+
+    #[test]
+    fn dutch_price_linear_strictly_decreasing() {
+        // Test that Linear Dutch auction price is strictly decreasing
+        let start_price = 1000_i128;
+        let floor_price = 500_i128;
+        let duration = 1000_u64;
+        let decay = DutchAuctionDecay::Linear;
+
+        let price_t0 = compute_dutch_price(start_price, floor_price, 0, duration, &decay, None);
+        let price_t100 = compute_dutch_price(start_price, floor_price, 100, duration, &decay, None);
+        let price_t500 = compute_dutch_price(start_price, floor_price, 500, duration, &decay, None);
+        let price_t900 = compute_dutch_price(start_price, floor_price, 900, duration, &decay, None);
+
+        assert_eq!(price_t0, start_price, "Price at t=0 should equal start_price");
+        assert!(price_t0 > price_t100, "Price should decrease from t=0 to t=100");
+        assert!(price_t100 > price_t500, "Price should decrease from t=100 to t=500");
+        assert!(price_t500 > price_t900, "Price should decrease from t=500 to t=900");
+        assert!(price_t900 >= floor_price, "Price should not go below floor_price");
+    }
+
+    #[test]
+    fn dutch_price_stepped_non_increasing() {
+        // Test that Stepped Dutch auction price is non-increasing
+        let start_price = 1000_i128;
+        let floor_price = 500_i128;
+        let duration = 1000_u64;
+        let step_count = 10_u32;
+        let decay = DutchAuctionDecay::Stepped;
+
+        let price_t0 = compute_dutch_price(start_price, floor_price, 0, duration, &decay, Some(step_count));
+        let price_t50 = compute_dutch_price(start_price, floor_price, 50, duration, &decay, Some(step_count));
+        let price_t100 = compute_dutch_price(start_price, floor_price, 100, duration, &decay, Some(step_count));
+        let price_t500 = compute_dutch_price(start_price, floor_price, 500, duration, &decay, Some(step_count));
+
+        assert_eq!(price_t0, start_price, "Price at t=0 should equal start_price");
+        assert!(price_t0 >= price_t50, "Price should not increase from t=0 to t=50");
+        assert!(price_t50 >= price_t100, "Price should not increase from t=50 to t=100");
+        assert!(price_t100 >= price_t500, "Price should not increase from t=100 to t=500");
+        assert!(price_t500 >= floor_price, "Price should not go below floor_price");
+    }
+
+    #[test]
+    fn dutch_price_linear_bounds() {
+        // Test that Linear Dutch auction price stays within bounds
+        let start_price = 1000_i128;
+        let floor_price = 500_i128;
+        let duration = 1000_u64;
+        let decay = DutchAuctionDecay::Linear;
+
+        for elapsed in [0, 1, 100, 500, 999, 1000, 2000] {
+            let price = compute_dutch_price(start_price, floor_price, elapsed, duration, &decay, None);
+            assert!(price >= floor_price, "Price at t={} must be >= floor_price", elapsed);
+            assert!(price <= start_price, "Price at t={} must be <= start_price", elapsed);
+        }
+    }
+
+    #[test]
+    fn dutch_price_stepped_bounds() {
+        // Test that Stepped Dutch auction price stays within bounds
+        let start_price = 1000_i128;
+        let floor_price = 500_i128;
+        let duration = 1000_u64;
+        let step_count = 10_u32;
+        let decay = DutchAuctionDecay::Stepped;
+
+        for elapsed in [0, 1, 100, 500, 999, 1000, 2000] {
+            let price = compute_dutch_price(start_price, floor_price, elapsed, duration, &decay, Some(step_count));
+            assert!(price >= floor_price, "Price at t={} must be >= floor_price", elapsed);
+            assert!(price <= start_price, "Price at t={} must be <= start_price", elapsed);
+        }
+    }
+
+    #[test]
+    fn dutch_price_zero_duration_returns_floor() {
+        // Test that zero duration returns floor_price immediately
+        let start_price = 1000_i128;
+        let floor_price = 500_i128;
+        let duration = 0_u64;
+        let decay = DutchAuctionDecay::Linear;
+
+        let price = compute_dutch_price(start_price, floor_price, 100, duration, &decay, None);
+        assert_eq!(price, floor_price, "Zero duration should return floor_price");
+    }
+
+    #[test]
+    fn dutch_price_elapsed_exceeds_duration_returns_floor() {
+        // Test that elapsed_time >= duration returns floor_price
+        let start_price = 1000_i128;
+        let floor_price = 500_i128;
+        let duration = 1000_u64;
+        let decay = DutchAuctionDecay::Linear;
+
+        let price = compute_dutch_price(start_price, floor_price, 2000, duration, &decay, None);
+        assert_eq!(price, floor_price, "Elapsed >= duration should return floor_price");
+    }
+
+    #[test]
+    fn dutch_price_equal_start_and_floor() {
+        // Test edge case where start_price equals floor_price
+        let start_price = 1000_i128;
+        let floor_price = 1000_i128;
+        let duration = 1000_u64;
+        let decay = DutchAuctionDecay::Linear;
+
+        for elapsed in [0, 100, 500, 999, 1000] {
+            let price = compute_dutch_price(start_price, floor_price, elapsed, duration, &decay, None);
+            assert_eq!(price, start_price, "When start equals floor, price should remain constant");
+        }
+    }
+
+    #[test]
+    fn dutch_price_linear_monotonicity_fine_grained() {
+        // Test strict monotonicity with fine-grained time steps
+        let start_price = 10000_i128;
+        let floor_price = 0_i128;
+        let duration = 1000_u64;
+        let decay = DutchAuctionDecay::Linear;
+
+        let mut prev_price = compute_dutch_price(start_price, floor_price, 0, duration, &decay, None);
+        assert_eq!(prev_price, start_price);
+
+        for elapsed in 1..1000u64 {
+            let price = compute_dutch_price(start_price, floor_price, elapsed, duration, &decay, None);
+            assert!(
+                prev_price > price,
+                "Price must strictly decrease: prev_price={} at t={}, price={} at t={}",
+                prev_price,
+                elapsed - 1,
+                price,
+                elapsed
+            );
+            prev_price = price;
+        }
+    }
+
+    #[test]
+    fn dutch_price_stepped_step_boundaries() {
+        // Test that stepped decay changes only at step boundaries
+        let start_price = 1000_i128;
+        let floor_price = 500_i128;
+        let duration = 1000_u64;
+        let step_count = 10_u32;
+        let decay = DutchAuctionDecay::Stepped;
+
+        let step_duration = duration / step_count as u64;
+
+        // Prices within the same step should be equal
+        let price_t0 = compute_dutch_price(start_price, floor_price, 0, duration, &decay, Some(step_count));
+        let price_t1 = compute_dutch_price(start_price, floor_price, 1, duration, &decay, Some(step_count));
+        let price_t49 = compute_dutch_price(start_price, floor_price, 49, duration, &decay, Some(step_count));
+        assert_eq!(price_t0, price_t1, "Prices within same step should be equal");
+        assert_eq!(price_t1, price_t49, "Prices within same step should be equal");
+
+        // Price at step boundary should decrease
+        let price_t50 = compute_dutch_price(start_price, floor_price, 50, duration, &decay, Some(step_count));
+        assert!(price_t49 >= price_t50, "Price should decrease at step boundary");
+    }
 }

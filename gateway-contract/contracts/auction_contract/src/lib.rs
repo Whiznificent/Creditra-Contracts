@@ -129,7 +129,7 @@ fn min_next_bid(highest_bid: i128, min_increment_bps: u32) -> i128 {
 /// * Panics with `"start_price must be >= floor_price"` if `start_price < floor_price`.
 /// * Panics with `"overflow in Dutch price calculation"` if `(start_price - floor_price) * elapsed_time` overflows `i128`.
 /// * Panics with `"current price should not underflow"` if the subtraction from `start_price` underflows.
-fn compute_dutch_price(
+pub fn compute_dutch_price(
     start_price: i128,
     floor_price: i128,
     elapsed_time: u64,

@@ -11,10 +11,16 @@ readme = "auction.md"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "dutch_price"
+path = "proofs/dutch_price.rs"
+required-features = []
+
 [dependencies]
 soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+kani = { version = "0.60.0" }
 
  
