@@ -63,6 +63,7 @@ mod storage;
 mod types;
 
 pub use errors::AuctionError;
+pub use events::BidRefundedEvent;
 pub use types::{AuctionMode, AuctionState, AuctionStatus, DutchAuctionDecay};
 
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol};
