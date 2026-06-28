@@ -10,18 +10,14 @@
 //! there is a real risk of expiry.
 
 use crate::auth::{require_admin, require_admin_auth};
-use crate::events::{
-    publish_credit_line_event, publish_default_liquidation_requested_event,
-    publish_default_liquidation_settled_event, CreditLineEvent, DefaultLiquidationSettledEvent,
-};
+use crate::events::{publish_credit_line_event, CreditLineEvent};
 use crate::storage::{
-    assert_not_paused, clear_repayment_schedule, grace_period_key, liquidation_settlement_key,
-    persist_credit_line, set_repayment_schedule, CREDIT_LINE_TTL_EXTEND_TO,
+    assert_not_paused, get_repayment_schedule,
+    set_repayment_schedule as storage_set_repayment_schedule, CREDIT_LINE_TTL_EXTEND_TO,
     CREDIT_LINE_TTL_THRESHOLD,
 };
-use crate::risk::{MAX_INTEREST_RATE_BPS, MAX_RISK_SCORE};
-use crate::types::{ContractError, CreditLineData, CreditStatus};
-use soroban_sdk::{symbol_short, Address, Env, Symbol};
+use crate::types::{ContractError, CreditLineData, CreditStatus, RepaymentSchedule};
+use soroban_sdk::{symbol_short, Address, Env};
 
 /// Helper: bump the TTL of a borrower's persistent credit-line entry.
 ///
@@ -505,6 +501,90 @@ pub fn reinstate_credit_line(env: Env, borrower: Address, target_status: CreditS
             risk_score: credit_line.risk_score,
         },
     );
+}
+
+// ── repayment schedule helpers ───────────────────────────────────────────────
+
+/// Set or replace a borrower's installment repayment schedule (admin only).
+///
+/// # Parameters
+/// - `borrower`: Borrower whose credit line schedule is being configured.
+/// - `amount_per_period`: Required repayment amount per installment; must be positive.
+/// - `period_seconds`: Duration of each installment period in seconds; must be positive.
+/// - `first_due_ts`: Timestamp at which the first installment is due.
+///
+/// # Panics
+/// - [`ContractError::InvalidAmount`] when `amount_per_period <= 0` or
+///   `period_seconds == 0`.
+/// - [`ContractError::CreditLineNotFound`] when `borrower` has no credit line.
+///
+/// # Authorization
+/// Requires admin authorization because the schedule controls delinquency and
+/// due-date state for the borrower.
+pub fn set_repayment_schedule(
+    env: &Env,
+    borrower: Address,
+    amount_per_period: i128,
+    period_seconds: u64,
+    first_due_ts: u64,
+) {
+    assert_not_paused(env);
+    require_admin_auth(env);
+
+    if amount_per_period <= 0 || period_seconds == 0 {
+        env.panic_with_error(ContractError::InvalidAmount);
+    }
+
+    if !env.storage().persistent().has(&borrower) {
+        env.panic_with_error(ContractError::CreditLineNotFound);
+    }
+
+    let schedule = RepaymentSchedule {
+        amount_per_period,
+        period_seconds,
+        next_due_ts: first_due_ts,
+    };
+    storage_set_repayment_schedule(env, &borrower, &schedule);
+}
+
+/// Advance a borrower's installment schedule after an effective repayment.
+///
+/// The public `repay_credit` entrypoint caps the requested repayment to the
+/// outstanding debt before calling this helper.  This function therefore uses
+/// `effective_repay` directly and advances `next_due_ts` by the whole number of
+/// installments covered:
+///
+/// ```text
+/// floor(effective_repay / amount_per_period) * period_seconds
+/// ```
+///
+/// Partial installments do not move the due date.  Arithmetic uses saturating
+/// `u64` operations so extreme schedule values cannot wrap timestamps.
+pub fn advance_repayment_schedule_after_repay(
+    env: &Env,
+    borrower: &Address,
+    effective_repay: i128,
+) {
+    if effective_repay <= 0 {
+        return;
+    }
+
+    let Some(mut schedule) = get_repayment_schedule(env, borrower) else {
+        return;
+    };
+
+    if schedule.amount_per_period <= 0 || schedule.period_seconds == 0 {
+        return;
+    }
+
+    let installments_paid = (effective_repay / schedule.amount_per_period) as u64;
+    if installments_paid == 0 {
+        return;
+    }
+
+    let advance_seconds = installments_paid.saturating_mul(schedule.period_seconds);
+    schedule.next_due_ts = schedule.next_due_ts.saturating_add(advance_seconds);
+    storage_set_repayment_schedule(env, borrower, &schedule);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
